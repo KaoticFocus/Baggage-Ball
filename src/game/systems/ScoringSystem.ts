@@ -4,7 +4,8 @@ export type ScoreEvent =
   | 'nearMiss'
   | 'helpfulBehavior'
   | 'betrayalSurvived'
-  | 'chaosBonus';
+  | 'chaosBonus'
+  | 'opponentMiss';
 
 export class ScoringSystem {
   score = 0;
@@ -44,6 +45,10 @@ export class ScoringSystem {
         break;
       case 'chaosBonus':
         points = 4;
+        break;
+      case 'opponentMiss':
+        points = 10;
+        this.combo++;
         break;
     }
 

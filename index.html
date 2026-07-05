@@ -12,13 +12,10 @@
     <!-- HUD overlay -->
     <div id="hud" class="overlay hidden">
       <div class="hud-top">
-        <div class="hud-score">
-          <span class="label">SCORE</span>
-          <span id="hud-score">0</span>
-        </div>
-        <div class="hud-combo">
-          <span class="label">COMBO</span>
-          <span id="hud-combo">0</span>
+        <div class="match-score">
+          <span class="score-you">YOU <strong id="hud-player-points">0</strong></span>
+          <span class="score-divider">·</span>
+          <span class="score-opponent"><span id="hud-opponent-label">DAVE</span> <strong id="hud-opponent-points">0</strong></span>
         </div>
         <div class="hud-rally">
           <span class="label">RALLY</span>
@@ -28,6 +25,10 @@
           <span class="label">MODE</span>
           <span id="hud-mode">VOICE</span>
         </div>
+      </div>
+      <div class="hud-meta-bar">
+        <span>Ball: <strong id="hud-ball-name">Ball</strong></span>
+        <span>Opponent: <strong id="hud-opponent-name">Opponent</strong></span>
       </div>
       <div class="hud-controls">
         <button id="hud-pause-btn" type="button" class="hud-btn">Pause</button>
@@ -74,6 +75,14 @@
 
     <div id="outburst-label" class="outburst-label hidden"></div>
     <div id="debug-toast" class="debug-toast hidden"></div>
+    <div id="opponent-bark-bubble" class="opponent-bark-bubble hidden">
+      <span id="opponent-bark-name" class="opponent-bark-name"></span>
+      <p id="opponent-bark-text"></p>
+    </div>
+    <div id="match-intro" class="match-intro hidden"></div>
+    <div id="match-countdown" class="match-countdown hidden"></div>
+    <div id="point-flash" class="point-flash hidden"></div>
+    <div id="ball-comment" class="ball-comment hidden"></div>
 
     <!-- Menu overlay -->
     <div id="menu-overlay" class="overlay">
@@ -82,21 +91,36 @@
         <p class="tagline">Every ball has emotional baggage. And they are all your problem.</p>
         <p class="subtitle">Pick your problem:</p>
         <div id="ball-select" class="ball-select"></div>
+        <div class="paddle-side-select">
+          <p class="subtitle side-label">Your paddle:</p>
+          <div class="side-toggle">
+            <button type="button" id="paddle-left-btn" class="side-btn">Left Paddle</button>
+            <button type="button" id="paddle-right-btn" class="side-btn side-btn-active">Right Paddle</button>
+          </div>
+        </div>
+        <div class="opponent-select-section">
+          <p class="subtitle side-label">Pick Your Opponent:</p>
+          <div id="opponent-select" class="opponent-select"></div>
+        </div>
         <div class="controls-hint">
-          <p>Mouse / ← → paddle · T mode · H hover · M mode dialogue · R/C/D/A +stats · 1–4 respond</p>
+          <p>Mouse / ↑ ↓ paddle · T mode · H hover · O opponent bark · Shift+O cycle opponent · 1–4 respond</p>
         </div>
       </div>
     </div>
 
-    <!-- Recap overlay -->
+    <!-- Match recap overlay -->
     <div id="recap-overlay" class="overlay hidden">
-      <div class="recap-content">
-        <h2>Rally Over</h2>
+      <div class="recap-content match-recap-content">
+        <h2 id="match-recap-title">Match Over</h2>
         <div id="recap-details"></div>
         <p id="recap-ball-note" class="recap-note"></p>
-        <p id="recap-replay-hook" class="recap-replay-hook hidden"></p>
-        <button id="recap-play-again" class="btn-primary">Play Again</button>
-        <button id="recap-menu" class="btn-secondary">Ball Select</button>
+        <p id="recap-opponent-note" class="recap-note opponent-recap-note"></p>
+        <div class="match-recap-actions">
+          <button id="recap-rematch" class="btn-primary">Rematch</button>
+          <button id="recap-change-ball" class="btn-secondary">Change Ball</button>
+          <button id="recap-change-opponent" class="btn-secondary">Change Opponent</button>
+          <button id="recap-menu" class="btn-secondary">Main Menu</button>
+        </div>
       </div>
     </div>
 

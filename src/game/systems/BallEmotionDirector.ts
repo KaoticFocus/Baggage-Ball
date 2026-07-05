@@ -60,6 +60,17 @@ export class BallEmotionDirector {
     this.reset();
   }
 
+  resetForRally(): void {
+    this.totalPaddleHits = 0;
+    this.paddleHitsSinceLastHover = 0;
+    this.lastHoverEndedAt = 0;
+    this.lastHoverStartedAt = 0;
+    this.firstHoverTriggered = false;
+    this.isHovering = false;
+    this.nextHoverEligibleAt = 0;
+    this.nearMissPending = false;
+  }
+
   getTotalPaddleHits(): number {
     return this.totalPaddleHits;
   }

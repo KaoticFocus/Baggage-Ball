@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import type { BallStats, BehaviorModifier } from '../types/BallTypes';
+import type { PaddleSide } from '../settings/PlayerSettings';
 
 export class BehaviorModifierSystem {
   activeModifier: BehaviorModifier | null = null;
@@ -55,8 +56,9 @@ const BASE_SPEED = 280;
 export function applyBehaviorToVelocity(
   body: Phaser.Physics.Arcade.Body,
   modifier: BehaviorModifier | null,
-  paddleX: number,
-  paddleY: number,
+  playerPaddleX: number,
+  playerPaddleY: number,
+  playerSide: PaddleSide,
   chaosMultiplier: number,
   stats?: BallStats
 ): void {
@@ -64,17 +66,18 @@ export function applyBehaviorToVelocity(
 
   let vx = body.velocity.x;
   let vy = body.velocity.y;
+  const towardPlayer = playerSide === 'left' ? -1 : 1;
+  const awayFromPlayer = -towardPlayer;
 
   switch (modifier) {
     case 'helpfulCurve': {
-      const dir = paddleX > body.x ? 1 : -1;
-      vx += dir * 22;
-      vy += body.y > paddleY ? -8 : 0;
+      vx += awayFromPlayer * 22;
+      vy += body.y > playerPaddleY ? 8 : -8;
       break;
     }
     case 'clingyDrift': {
-      vx += (paddleX - body.x) * 0.04;
-      vy += (paddleY - 80 - body.y) * 0.02;
+      vx += (playerPaddleX - body.x) * 0.04;
+      vy += (playerPaddleY - body.y) * 0.02;
       break;
     }
     case 'erraticBounce':
@@ -101,23 +104,21 @@ export function applyBehaviorToVelocity(
       break;
     case 'hostileFakeOut':
       vx = -vx * 1.1;
-      vy = Math.abs(vy) * 0.6;
+      vy = Math.abs(vy) * 0.6 * (vy >= 0 ? 1 : -1);
       break;
     case 'resentmentShot':
-      vx += (body.x - paddleX) * 0.15;
-      vy = -Math.abs(vy) * 1.25;
+      vx += (body.x - playerPaddleX) * 0.12 + awayFromPlayer * 40;
+      vy += (Math.random() - 0.5) * 80;
       break;
     case 'gentleReturn':
       vx *= 0.82;
-      vy = -Math.abs(vy) * 0.88;
+      vy *= 0.88;
       break;
   }
 
-  // Passive stat-driven drift (always active)
   if (stats) {
     if (stats.trust > 60 && !modifier) {
-      const dir = paddleX > body.x ? 1 : -1;
-      vx += dir * 6;
+      vx += awayFromPlayer * 6;
     }
     if (stats.resentment > 70 && Math.random() < 0.08) {
       vx += (Math.random() - 0.5) * 80;
@@ -126,8 +127,8 @@ export function applyBehaviorToVelocity(
       vx += (Math.random() - 0.5) * 14 * chaosMultiplier;
       vy += (Math.random() - 0.5) * 10 * chaosMultiplier;
     }
-    if (stats.attachment > 80 && body.y > paddleY - 150) {
-      vx += (paddleX - body.x) * 0.025;
+    if (stats.attachment > 80 && Math.abs(body.x - playerPaddleX) < 120) {
+      vx += (playerPaddleX - body.x) * 0.025;
     }
   }
 
@@ -140,8 +141,11 @@ export function applyBehaviorToVelocity(
     vy = (vy / newSpeed) * clampedSpeed;
   }
 
-  if (Math.abs(vy) < 80) {
-    vy = vy >= 0 ? 100 : -100;
+  if (Math.abs(vx) < 80) {
+    vx = vx >= 0 ? 100 : -100;
+  }
+  if (Math.abs(vy) < 60) {
+    vy = vy >= 0 ? 70 : -70;
   }
 
   body.setVelocity(vx, vy);
@@ -150,18 +154,43 @@ export function applyBehaviorToVelocity(
 export function launchBall(
   body: Phaser.Physics.Arcade.Body,
   speedMultiplier: number,
-  towardPaddle?: number
+  options?: { toward?: PaddleSide; serve?: boolean }
 ): void {
-  let angle = Phaser.Math.Between(-60, 60) - 90;
-  if (towardPaddle !== undefined) {
-    angle = Phaser.Math.RadToDeg(Math.atan2(1, (towardPaddle - body.x) * 0.01)) - 90;
-    angle = Phaser.Math.Clamp(angle, -120, -60);
-  }
-  const rad = Phaser.Math.DegToRad(angle);
-  const speed = BASE_SPEED * speedMultiplier;
-  body.setVelocity(Math.cos(rad) * speed, Math.sin(rad) * speed);
+  const toward = options?.toward ?? (Math.random() < 0.5 ? 'left' : 'right');
+  const dir = toward === 'right' ? 1 : -1;
+  const angleDeg = Phaser.Math.Between(options?.serve ? -22 : -32, options?.serve ? 22 : 32);
+  const rad = Phaser.Math.DegToRad(angleDeg);
+  const speed = BASE_SPEED * speedMultiplier * (options?.serve ? 0.78 : 1);
+
+  body.setVelocity(Math.cos(rad) * speed * dir, Math.sin(rad) * speed);
 }
 
+export function reflectVerticalPaddle(
+  body: Phaser.Physics.Arcade.Body,
+  paddleY: number,
+  paddleLength: number,
+  paddleSide: PaddleSide,
+  gentleReturn: boolean,
+  stats?: BallStats
+): void {
+  const hitPos = (body.y - paddleY) / (paddleLength / 2);
+  const clampedHit = Phaser.Math.Clamp(hitPos, -1, 1);
+  let angleDeg = clampedHit * (gentleReturn ? 42 : 58);
+
+  if (stats && stats.resentment > 70 && Math.random() < 0.35) {
+    angleDeg += (Math.random() - 0.5) * 36;
+  }
+
+  const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.y ** 2) || BASE_SPEED;
+  const awaySign = paddleSide === 'left' ? 1 : -1;
+  const rad = Phaser.Math.DegToRad(angleDeg);
+  const vx = Math.abs(Math.cos(rad) * speed) * awaySign;
+  const vy = Math.sin(rad) * speed;
+
+  body.setVelocity(vx, vy);
+}
+
+/** @deprecated Use reflectVerticalPaddle for side-paddle layout. */
 export function reflectPaddle(
   body: Phaser.Physics.Arcade.Body,
   paddleX: number,

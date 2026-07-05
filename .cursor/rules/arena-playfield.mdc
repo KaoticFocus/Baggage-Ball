@@ -1,40 +1,37 @@
 ---
-description: Baggage Ball arena is a three-sided playfield with an open bottom failure zone
+description: Baggage Ball arena uses top/bottom walls with open left/right failure zones
 alwaysApply: true
 ---
 
-# Arena: Three-Sided Playfield
+# Arena: Side-Paddle Playfield
 
-The arena is a **three-sided playfield**. The bottom is an **open failure zone**, not a wall.
+The arena is a **classic side-paddle layout**. **Top and bottom are walls**. **Left and right are open failure zones**, not walls.
 
 ## Visual design
 
-- Draw borders on **left, top, and right** only.
-- Do **not** draw a bottom border on the playfield.
-- The bottom should read as open/dangerous (e.g. faint red glow below the paddle), not as a bounce surface.
+- Draw borders on **top and bottom** only.
+- Do **not** draw left/right playfield borders that imply side walls.
+- Left/right edges should read as open/dangerous (e.g. faint red glow on both sides).
 
 ## Physics & gameplay
 
-- The ball must **not** collide with or bounce off a bottom wall.
-- World bounds may extend below the visible playfield so the ball can fall through after a miss.
-- End the rally when the ball passes below the playfield (e.g. `ball.y > playfieldBottom + margin` → `endRound()`).
-- Do **not** clamp the ball inside the playfield after it passes the paddle.
+- The ball **bounces off top and bottom** walls.
+- The ball **bounces off player and opponent paddles** (vertical paddles on left/right).
+- The ball must **not** bounce off left/right side walls.
+- World bounds may extend far beyond the visible left/right edges so the ball can exit after a miss.
+- **Player miss:** ball exits past the player's paddle side → end rally.
+- **Opponent miss:** ball exits past the opponent's side → score point and re-serve.
 
-## Allowed bounces
+## Paddle layout
 
-The ball may bounce only off:
+- Player chooses **left** or **right** paddle (default: right).
+- Opponent paddle is on the **opposite** side.
+- Player paddle: mouse Y + up/down arrows.
+- Opponent: simple AI tracking (no personality yet).
 
-- Left wall
-- Right wall
-- Top wall
-- Paddle
+## Bottom UI zone
 
-## When changing playfield code
-
-Before adding borders, bounds, or collision:
-
-1. Confirm the bottom stays open.
-2. Confirm a miss ends the rally instead of bouncing.
-3. Avoid reintroducing a full `strokeRect` or bottom world-bound collision.
+- Reserve bottom screen space for dialogue/response UI.
+- Response choices must **not** overlap side paddles.
 
 Primary reference: `src/game/scenes/PlayScene.ts`.

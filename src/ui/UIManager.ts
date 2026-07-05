@@ -1,8 +1,19 @@
 import type { DialogueEvent, InputMode } from '../game/types/DialogueTypes';
+import {
+  getPlayerPaddleSide,
+  getSelectedOpponentId,
+  setPlayerPaddleSide,
+  setSelectedOpponentId,
+  type OpponentId,
+  type PaddleSide,
+} from '../game/settings/PlayerSettings';
+import { opponentMonologues } from '../game/data/opponentMonologues';
+import type { BarkResult } from '../game/systems/OpponentBarkSystem';
+import { positionOpponentBarkBubble } from '../game/systems/OpponentBarkSystem';
 import { BALL_PERSONALITIES } from '../game/data/ballPersonalities';
+import type { MatchRecapData } from '../game/systems/MatchRecapSystem';
+import type { BallStats } from '../game/types/BallTypes';
 import { STAT_KEYS } from '../game/types/BallTypes';
-import { formatStatLabel } from '../game/systems/RecapSystem';
-import type { RecapData, BallStats } from '../game/types/BallTypes';
 import {
   positionDialogueBubbleNearBall,
   truncateHoverText,
@@ -15,12 +26,16 @@ export class UIManager {
   private dialogueOverlay = document.getElementById('dialogue-overlay')!;
   private recapOverlay = document.getElementById('recap-overlay')!;
   private ballSelect = document.getElementById('ball-select')!;
+  private opponentSelect = document.getElementById('opponent-select')!;
+  private opponentBarkBubble = document.getElementById('opponent-bark-bubble')!;
   private onBallSelected?: (ballId: string) => void;
-  private ballSelectHandler?: (ballId: string) => void;
+  private ballSelectHandler?: (ballId: string, playerSide: PaddleSide, opponentId: OpponentId) => void;
   private onResponseSelected?: (index: number) => void;
   private onCustomResponseRequested?: () => void;
   private onCustomResponseSubmitted?: (text: string) => void;
-  private onRecapPlayAgain?: () => void;
+  private onRecapRematch?: () => void;
+  private onRecapChangeBall?: () => void;
+  private onRecapChangeOpponent?: () => void;
   private onRecapMenu?: () => void;
   private onPauseToggle?: () => void;
   private onQuit?: () => void;
@@ -30,9 +45,19 @@ export class UIManager {
   private customInputVisible = false;
   private canvasBounds: ScreenBounds | null = null;
   private lastBallScreen = { x: 0, y: 0 };
+  private selectedPaddleSide: PaddleSide = getPlayerPaddleSide();
+  private selectedOpponentId: OpponentId = getSelectedOpponentId();
+  private matchIntro = document.getElementById('match-intro')!;
+  private matchCountdown = document.getElementById('match-countdown')!;
+  private pointFlash = document.getElementById('point-flash')!;
+  private ballComment = document.getElementById('ball-comment')!;
+  private ballCommentTimer: ReturnType<typeof setTimeout> | null = null;
+  private opponentBarkTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.renderBallSelect();
+    this.renderOpponentSelect();
+    this.setupPaddleSideSelector();
     this.ballSelect.addEventListener('click', (e) => {
       const card = (e.target as HTMLElement).closest<HTMLButtonElement>('.ball-card');
       if (!card) return;
@@ -40,8 +65,14 @@ export class UIManager {
       if (ballId) this.handleBallSelect(ballId);
     });
 
-    document.getElementById('recap-play-again')!.addEventListener('click', () => {
-      this.onRecapPlayAgain?.();
+    document.getElementById('recap-rematch')!.addEventListener('click', () => {
+      this.onRecapRematch?.();
+    });
+    document.getElementById('recap-change-ball')!.addEventListener('click', () => {
+      this.onRecapChangeBall?.();
+    });
+    document.getElementById('recap-change-opponent')!.addEventListener('click', () => {
+      this.onRecapChangeOpponent?.();
     });
     document.getElementById('recap-menu')!.addEventListener('click', () => {
       this.onRecapMenu?.();
@@ -63,7 +94,9 @@ export class UIManager {
     onResponseSelected?: (index: number) => void;
     onCustomResponseRequested?: () => void;
     onCustomResponseSubmitted?: (text: string) => void;
-    onRecapPlayAgain?: () => void;
+    onRecapRematch?: () => void;
+    onRecapChangeBall?: () => void;
+    onRecapChangeOpponent?: () => void;
     onRecapMenu?: () => void;
     onPauseToggle?: () => void;
     onQuit?: () => void;
@@ -76,7 +109,11 @@ export class UIManager {
     if (callbacks.onCustomResponseSubmitted !== undefined) {
       this.onCustomResponseSubmitted = callbacks.onCustomResponseSubmitted;
     }
-    if (callbacks.onRecapPlayAgain !== undefined) this.onRecapPlayAgain = callbacks.onRecapPlayAgain;
+    if (callbacks.onRecapRematch !== undefined) this.onRecapRematch = callbacks.onRecapRematch;
+    if (callbacks.onRecapChangeBall !== undefined) this.onRecapChangeBall = callbacks.onRecapChangeBall;
+    if (callbacks.onRecapChangeOpponent !== undefined) {
+      this.onRecapChangeOpponent = callbacks.onRecapChangeOpponent;
+    }
     if (callbacks.onRecapMenu !== undefined) this.onRecapMenu = callbacks.onRecapMenu;
     if (callbacks.onPauseToggle !== undefined) this.onPauseToggle = callbacks.onPauseToggle;
     if (callbacks.onQuit !== undefined) this.onQuit = callbacks.onQuit;
@@ -99,8 +136,41 @@ export class UIManager {
     this.setPaused(false);
   }
 
-  setBallSelectHandler(handler: (ballId: string) => void): void {
+  setBallSelectHandler(
+    handler: (ballId: string, playerSide: PaddleSide, opponentId: OpponentId) => void
+  ): void {
     this.ballSelectHandler = handler;
+  }
+
+  getSelectedOpponentId(): OpponentId {
+    return this.selectedOpponentId;
+  }
+
+  setSelectedOpponentId(opponentId: OpponentId): void {
+    this.selectedOpponentId = opponentId;
+    setSelectedOpponentId(opponentId);
+    this.renderOpponentSelect();
+  }
+
+  getSelectedPaddleSide(): PaddleSide {
+    return this.selectedPaddleSide;
+  }
+
+  private setupPaddleSideSelector(): void {
+    const leftBtn = document.getElementById('paddle-left-btn') as HTMLButtonElement;
+    const rightBtn = document.getElementById('paddle-right-btn') as HTMLButtonElement;
+
+    const applySide = (side: PaddleSide) => {
+      this.selectedPaddleSide = side;
+      setPlayerPaddleSide(side);
+      leftBtn.classList.toggle('side-btn-active', side === 'left');
+      rightBtn.classList.toggle('side-btn-active', side === 'right');
+    };
+
+    applySide(getPlayerPaddleSide());
+
+    leftBtn.addEventListener('click', () => applySide('left'));
+    rightBtn.addEventListener('click', () => applySide('right'));
   }
 
   setCanvasBounds(bounds: ScreenBounds): void {
@@ -113,10 +183,33 @@ export class UIManager {
 
   private handleBallSelect(ballId: string): void {
     if (this.ballSelectHandler) {
-      this.ballSelectHandler(ballId);
+      this.ballSelectHandler(ballId, this.selectedPaddleSide, this.selectedOpponentId);
       return;
     }
     this.onBallSelected?.(ballId);
+  }
+
+  private renderOpponentSelect(): void {
+    this.opponentSelect.innerHTML = '';
+    for (const opponent of opponentMonologues) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'opponent-card';
+      if (opponent.opponentId === this.selectedOpponentId) {
+        btn.classList.add('opponent-card-active');
+      }
+      btn.dataset.opponentId = opponent.opponentId;
+      btn.innerHTML = `
+        <span class="opponent-card-name">${opponent.displayName}</span>
+        <span class="opponent-card-summary">${opponent.personalitySummary}</span>
+      `;
+      btn.addEventListener('click', () => {
+        this.selectedOpponentId = opponent.opponentId;
+        setSelectedOpponentId(opponent.opponentId);
+        this.renderOpponentSelect();
+      });
+      this.opponentSelect.appendChild(btn);
+    }
   }
 
   private renderBallSelect(): void {
@@ -140,22 +233,88 @@ export class UIManager {
     this.hud.classList.add('hidden');
     this.dialogueOverlay.classList.add('hidden');
     this.recapOverlay.classList.add('hidden');
+    this.hideMatchOverlays();
     this.hideOutburst();
+    this.hideOpponentBark();
   }
 
-  showPlaying(ballName: string): void {
+  showPlaying(ballName: string, opponentName: string, opponentShortName: string): void {
     this.menuOverlay.classList.add('hidden');
     this.recapOverlay.classList.add('hidden');
     this.hud.classList.remove('hidden');
+    this.hideMatchOverlays();
     this.resetGameControls();
     document.getElementById('stats-ball-name')!.textContent = ballName;
+    document.getElementById('hud-ball-name')!.textContent = ballName;
+    document.getElementById('hud-opponent-name')!.textContent = opponentName;
+    document.getElementById('hud-opponent-label')!.textContent = opponentShortName;
   }
 
-  updateHUD(score: number, combo: number, rally: number, mode: InputMode): void {
-    document.getElementById('hud-score')!.textContent = String(score);
-    document.getElementById('hud-combo')!.textContent = String(combo);
+  updateMatchHUD(
+    playerPoints: number,
+    opponentPoints: number,
+    rally: number,
+    mode: InputMode,
+    ballName: string,
+    opponentName: string,
+    opponentShortName: string
+  ): void {
+    document.getElementById('hud-player-points')!.textContent = String(playerPoints);
+    document.getElementById('hud-opponent-points')!.textContent = String(opponentPoints);
     document.getElementById('hud-rally')!.textContent = String(rally);
     document.getElementById('hud-mode')!.textContent = mode === 'voice' ? 'VOICE' : 'TEXT';
+    document.getElementById('hud-ball-name')!.textContent = ballName;
+    document.getElementById('hud-opponent-name')!.textContent = opponentName;
+    document.getElementById('hud-opponent-label')!.textContent = opponentShortName;
+  }
+
+  showMatchIntro(text: string): void {
+    this.matchIntro.textContent = text;
+    this.matchIntro.classList.remove('hidden');
+  }
+
+  hideMatchIntro(): void {
+    this.matchIntro.classList.add('hidden');
+  }
+
+  showCountdown(text: string): void {
+    this.matchCountdown.textContent = text;
+    this.matchCountdown.classList.remove('hidden');
+  }
+
+  hideCountdown(): void {
+    this.matchCountdown.classList.add('hidden');
+  }
+
+  showPointFlash(text: string): void {
+    this.pointFlash.textContent = text;
+    this.pointFlash.classList.remove('hidden');
+  }
+
+  hidePointFlash(): void {
+    this.pointFlash.classList.add('hidden');
+  }
+
+  showBallComment(text: string, durationMs = 1800): void {
+    this.ballComment.textContent = text;
+    this.ballComment.classList.remove('hidden');
+    if (this.ballCommentTimer) clearTimeout(this.ballCommentTimer);
+    this.ballCommentTimer = setTimeout(() => this.hideBallComment(), durationMs);
+  }
+
+  hideBallComment(): void {
+    this.ballComment.classList.add('hidden');
+    if (this.ballCommentTimer) {
+      clearTimeout(this.ballCommentTimer);
+      this.ballCommentTimer = null;
+    }
+  }
+
+  hideMatchOverlays(): void {
+    this.hideMatchIntro();
+    this.hideCountdown();
+    this.hidePointFlash();
+    this.hideBallComment();
   }
 
   updateStats(stats: BallStats): void {
@@ -262,6 +421,60 @@ export class UIManager {
     this.hideCustomInputArea();
   }
 
+  showOpponentBark(
+    result: BarkResult,
+    screenX: number,
+    screenY: number,
+    opponentSide: PaddleSide,
+    canvasBounds?: ScreenBounds
+  ): void {
+    const ballDialogueVisible = !this.dialogueOverlay.classList.contains('hidden');
+
+    document.getElementById('opponent-bark-name')!.textContent = result.displayName;
+    document.getElementById('opponent-bark-text')!.textContent = truncateHoverText(result.text, 120);
+    this.opponentBarkBubble.classList.remove('hidden');
+
+    if (canvasBounds) {
+      positionOpponentBarkBubble(
+        this.opponentBarkBubble,
+        screenX,
+        screenY,
+        opponentSide,
+        canvasBounds,
+        ballDialogueVisible
+      );
+    }
+
+    if (this.opponentBarkTimer) clearTimeout(this.opponentBarkTimer);
+    this.opponentBarkTimer = setTimeout(() => this.hideOpponentBark(), 3200);
+  }
+
+  updateOpponentBarkPosition(
+    screenX: number,
+    screenY: number,
+    opponentSide: PaddleSide,
+    canvasBounds?: ScreenBounds
+  ): void {
+    if (this.opponentBarkBubble.classList.contains('hidden')) return;
+    if (!canvasBounds) return;
+    positionOpponentBarkBubble(
+      this.opponentBarkBubble,
+      screenX,
+      screenY,
+      opponentSide,
+      canvasBounds,
+      !this.dialogueOverlay.classList.contains('hidden')
+    );
+  }
+
+  hideOpponentBark(): void {
+    this.opponentBarkBubble.classList.add('hidden');
+    if (this.opponentBarkTimer) {
+      clearTimeout(this.opponentBarkTimer);
+      this.opponentBarkTimer = null;
+    }
+  }
+
   showOutburst(label: string): void {
     const el = document.getElementById('outburst-label')!;
     el.textContent = label;
@@ -280,30 +493,43 @@ export class UIManager {
     this.debugToastTimer = setTimeout(() => el.classList.add('hidden'), 2200);
   }
 
-  showRecap(data: RecapData): void {
+  showMatchRecap(
+    data: MatchRecapData,
+    callbacks: {
+      onRematch?: () => void;
+      onChangeBall?: () => void;
+      onChangeOpponent?: () => void;
+      onMainMenu?: () => void;
+    }
+  ): void {
     this.hud.classList.add('hidden');
     this.dialogueOverlay.classList.add('hidden');
     this.recapOverlay.classList.remove('hidden');
+    this.hideMatchOverlays();
     this.hideOutburst();
+    this.hideOpponentBark();
 
-    const aiTag = data.aiGenerated ? '<p class="recap-ai-tag">AI-generated recap</p>' : '';
+    if (callbacks.onRematch !== undefined) this.onRecapRematch = callbacks.onRematch;
+    if (callbacks.onChangeBall !== undefined) this.onRecapChangeBall = callbacks.onChangeBall;
+    if (callbacks.onChangeOpponent !== undefined) {
+      this.onRecapChangeOpponent = callbacks.onChangeOpponent;
+    }
+    if (callbacks.onMainMenu !== undefined) this.onRecapMenu = callbacks.onMainMenu;
+
+    const title =
+      data.winner === 'player' ? 'You Win!' : `${data.opponentShortName} Wins`;
+    document.getElementById('match-recap-title')!.textContent = title;
 
     document.getElementById('recap-details')!.innerHTML = `
-      ${aiTag}
-      <p><strong>${data.ballName}</strong></p>
-      <p>Final Score: <span class="highlight">${data.score}</span></p>
+      <p>Final Score: <span class="highlight">YOU ${data.playerPoints} · ${data.opponentShortName} ${data.opponentPoints}</span></p>
+      <p>Ball: <strong>${data.ballName}</strong> · Opponent: <strong>${data.opponentName}</strong></p>
       <p>Longest Rally: <span class="highlight">${data.longestRally}</span></p>
       <p class="recap-status">Relationship Status: <em>${data.relationshipStatus}</em></p>
       <p class="recap-diagnosis">${data.emotionalDiagnosis}</p>
-      ${data.worstThingThePlayerDid ? `<p class="recap-worst">Worst Thing You Did: ${data.worstThingThePlayerDid}</p>` : ''}
-      <p class="recap-stats">Highest: ${formatStatLabel(data.highestStat.key)} (${Math.round(data.highestStat.value)}) · Lowest: ${formatStatLabel(data.lowestStat.key)} (${Math.round(data.lowestStat.value)})</p>
+      <p class="recap-stats">Peak: ${data.highestStatLabel} · Low: ${data.lowestStatLabel}</p>
     `;
-    document.getElementById('recap-ball-note')!.textContent = `"${data.note}"`;
-    const hookEl = document.getElementById('recap-replay-hook');
-    if (hookEl) {
-      hookEl.textContent = data.replayHook ?? '';
-      hookEl.classList.toggle('hidden', !data.replayHook);
-    }
+    document.getElementById('recap-ball-note')!.textContent = `"${data.ballNote}"`;
+    document.getElementById('recap-opponent-note')!.textContent = `"${data.opponentNote}"`;
   }
 
   private handleTextSubmit(): void {

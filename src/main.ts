@@ -3,7 +3,6 @@ import { uiManager } from './ui/UIManager';
 
 const game = createBaggageBallGame('game-container');
 
-// Wire ball pick immediately — menu HTML is visible before Phaser scenes boot
-uiManager.setBallSelectHandler((ballId) => {
-  game.scene.start('PlayScene', { ballId });
+uiManager.setBallSelectHandler((ballId, playerSide, opponentId) => {
+  game.scene.start('PlayScene', { ballId, playerSide, opponentId });
 });
