@@ -1,0 +1,562 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap');
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #050508;
+  color: #e0e8ff;
+  font-family: 'Share Tech Mono', monospace;
+  overflow: hidden;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#game-container {
+  position: relative;
+  z-index: 1;
+}
+
+#game-container canvas {
+  border: 1px solid #2a2a4a;
+  box-shadow: 0 0 40px rgba(0, 229, 255, 0.15);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.overlay.hidden {
+  display: none;
+}
+
+#menu-overlay:not(.hidden),
+#recap-overlay:not(.hidden) {
+  pointer-events: auto;
+}
+
+.overlay > * {
+  pointer-events: auto;
+}
+
+/* ── Menu ── */
+.menu-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 5, 8, 0.92);
+  backdrop-filter: blur(8px);
+  padding: 2rem;
+  text-align: center;
+}
+
+.game-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 3.5rem;
+  font-weight: 900;
+  letter-spacing: 0.15em;
+  color: #00e5ff;
+  text-shadow: 0 0 30px rgba(0, 229, 255, 0.5);
+  margin-bottom: 0.5rem;
+}
+
+.tagline {
+  font-size: 1rem;
+  color: #8899bb;
+  max-width: 500px;
+  margin-bottom: 2rem;
+  line-height: 1.5;
+}
+
+.subtitle {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.85rem;
+  letter-spacing: 0.2em;
+  color: #ff4466;
+  margin-bottom: 1.5rem;
+  text-transform: uppercase;
+}
+
+.ball-select {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 900px;
+  margin-bottom: 2rem;
+}
+
+.ball-card {
+  background: rgba(20, 20, 40, 0.9);
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  padding: 1.25rem;
+  width: 260px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  color: inherit;
+  font-family: inherit;
+}
+
+.ball-card:hover {
+  border-color: #00e5ff;
+  box-shadow: 0 0 20px rgba(0, 229, 255, 0.25);
+  transform: translateY(-2px);
+}
+
+.ball-name {
+  display: block;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.4rem;
+  color: #ff4466;
+  margin-bottom: 0.25rem;
+}
+
+.ball-title {
+  display: block;
+  font-size: 0.75rem;
+  color: #00e5ff;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 0.75rem;
+}
+
+.ball-desc {
+  display: block;
+  font-size: 0.85rem;
+  color: #8899bb;
+  line-height: 1.4;
+}
+
+.controls-hint {
+  font-size: 0.75rem;
+  color: #556688;
+  max-width: 600px;
+}
+
+.controls-hint p {
+  line-height: 1.6;
+}
+
+/* ── HUD ── */
+.hud-top {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2rem;
+  background: rgba(10, 10, 18, 0.85);
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  padding: 0.5rem 1.5rem;
+  pointer-events: none;
+}
+
+.hud-top .label {
+  display: block;
+  font-size: 0.6rem;
+  letter-spacing: 0.15em;
+  color: #556688;
+}
+
+.hud-top span:last-child {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.2rem;
+  color: #00e5ff;
+}
+
+.stats-panel {
+  position: fixed;
+  top: 80px;
+  right: 16px;
+  width: 180px;
+  background: rgba(10, 10, 18, 0.9);
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  padding: 0.75rem;
+  pointer-events: none;
+}
+
+.stats-panel h3 {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.7rem;
+  color: #ff4466;
+  margin-bottom: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+.stat-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.65rem;
+  color: #8899bb;
+}
+
+.stat-row span:first-child {
+  width: 70px;
+  flex-shrink: 0;
+}
+
+.stat-bar {
+  flex: 1;
+  height: 6px;
+  background: #1a1a2a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.stat-fill {
+  height: 100%;
+  width: 50%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.stat-fill.trust { background: #00e5ff; }
+.stat-fill.resentment { background: #ff4466; }
+.stat-fill.ego { background: #ffaa00; }
+.stat-fill.chaos { background: #aa44ff; }
+.stat-fill.attachment { background: #ff66aa; }
+.stat-fill.drama { background: #ff8800; }
+.stat-fill.patience { background: #44cc88; }
+
+/* ── Dialogue ── */
+#dialogue-overlay {
+  pointer-events: none;
+}
+
+/* ── Hover state ── */
+.hover-banner {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.85rem;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: #ff4466;
+  text-shadow: 0 0 20px rgba(255, 68, 102, 0.6);
+  animation: hoverPulse 1.2s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 22;
+}
+
+@keyframes hoverPulse {
+  0%, 100% { opacity: 0.7; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 1; transform: translate(-50%, -50%) scale(1.03); }
+}
+
+.emotional-result {
+  margin-top: 0.6rem;
+  font-size: 0.75rem;
+  color: #ffaa00;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-family: 'Orbitron', sans-serif;
+}
+
+.outburst-label {
+  position: fixed;
+  top: 50%;
+  left: 16px;
+  transform: translateY(-50%);
+  writing-mode: vertical-rl;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  color: #aa44ff;
+  text-shadow: 0 0 12px rgba(170, 68, 255, 0.5);
+  pointer-events: none;
+  z-index: 8;
+  animation: outburstFlash 0.6s ease-in-out infinite;
+}
+
+@keyframes outburstFlash {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.debug-toast {
+  position: fixed;
+  bottom: 80px;
+  right: 16px;
+  background: rgba(255, 68, 102, 0.9);
+  color: #fff;
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  z-index: 30;
+}
+
+.recap-status {
+  color: #ff4466 !important;
+  font-size: 1.05rem !important;
+  margin-top: 0.5rem !important;
+}
+
+.recap-diagnosis {
+  color: #00e5ff !important;
+  font-style: italic;
+  max-width: 480px;
+  margin: 0.5rem auto !important;
+}
+
+.response-btn-custom {
+  border-color: #aa44ff;
+  margin-top: 0.25rem;
+}
+
+.response-btn-custom:hover {
+  border-color: #dd99ff;
+  background: rgba(170, 68, 255, 0.1);
+}
+
+.player-response-echo {
+  font-size: 0.8rem;
+  color: #00e5ff;
+  font-style: italic;
+  margin-bottom: 0.4rem;
+}
+
+.recap-worst {
+  color: #ff4466 !important;
+  font-size: 0.9rem !important;
+}
+
+.recap-replay-hook {
+  color: #8899bb;
+  font-style: italic;
+  margin-bottom: 1rem;
+}
+
+.recap-ai-tag {
+  font-size: 0.65rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #aa44ff;
+  margin-bottom: 0.5rem;
+}
+
+
+.speech-bubble {
+  position: fixed;
+  transform: translate(-50%, -100%);
+  max-width: 320px;
+  background: rgba(15, 15, 30, 0.95);
+  border: 1px solid #ff4466;
+  border-radius: 12px;
+  padding: 1rem;
+  box-shadow: 0 0 20px rgba(255, 68, 102, 0.2);
+  pointer-events: none;
+  z-index: 20;
+  animation: bubblePop 0.25s ease-out;
+}
+
+@keyframes bubblePop {
+  from { transform: translate(-50%, -100%) scale(0.85); opacity: 0; }
+  to { transform: translate(-50%, -100%) scale(1); opacity: 1; }
+}
+
+.speech-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 8px solid transparent;
+  border-top-color: #ff4466;
+}
+
+#ball-line {
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #e0e8ff;
+}
+
+.ball-reaction {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: #00e5ff;
+  font-style: italic;
+}
+
+.response-choices {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: min(600px, 90vw);
+  pointer-events: auto;
+  z-index: 25;
+}
+
+.response-btn {
+  background: rgba(20, 20, 40, 0.95);
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  padding: 0.75rem 1rem 0.75rem 2.5rem;
+  color: #e0e8ff;
+  font-family: inherit;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+  line-height: 1.4;
+}
+
+.response-btn:hover {
+  border-color: #00e5ff;
+  background: rgba(0, 229, 255, 0.08);
+}
+
+.response-key {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.75rem;
+  color: #ff4466;
+  background: rgba(255, 68, 102, 0.15);
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.text-input-area {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.5rem;
+  width: min(500px, 90vw);
+  pointer-events: auto;
+  z-index: 26;
+}
+
+.text-input-area input {
+  flex: 1;
+  background: rgba(20, 20, 40, 0.95);
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  color: #e0e8ff;
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.text-input-area input:focus {
+  outline: none;
+  border-color: #00e5ff;
+}
+
+.text-input-area button {
+  background: #00e5ff;
+  color: #050508;
+  border: none;
+  border-radius: 6px;
+  padding: 0.75rem 1.25rem;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.75rem;
+  cursor: pointer;
+  letter-spacing: 0.05em;
+}
+
+/* ── Recap ── */
+.recap-content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 5, 8, 0.94);
+  backdrop-filter: blur(8px);
+  padding: 2rem;
+  text-align: center;
+}
+
+.recap-content h2 {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 2rem;
+  color: #ff4466;
+  margin-bottom: 1.5rem;
+  letter-spacing: 0.1em;
+}
+
+#recap-details {
+  font-size: 1rem;
+  line-height: 2;
+  margin-bottom: 1.5rem;
+  color: #8899bb;
+}
+
+#recap-details .highlight {
+  color: #00e5ff;
+  font-family: 'Orbitron', sans-serif;
+}
+
+.recap-note {
+  font-size: 1.1rem;
+  color: #e0e8ff;
+  font-style: italic;
+  max-width: 500px;
+  margin-bottom: 2rem;
+  line-height: 1.5;
+}
+
+.btn-primary,
+.btn-secondary {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+  padding: 0.75rem 2rem;
+  border-radius: 6px;
+  cursor: pointer;
+  margin: 0.25rem;
+  border: none;
+}
+
+.btn-primary {
+  background: #00e5ff;
+  color: #050508;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: #8899bb;
+  border: 1px solid #2a2a4a;
+}
+
+.btn-primary:hover {
+  box-shadow: 0 0 20px rgba(0, 229, 255, 0.4);
+}
+
+.btn-secondary:hover {
+  border-color: #8899bb;
+  color: #e0e8ff;
+}

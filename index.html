@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Baggage Ball</title>
+    <link rel="stylesheet" href="/src/ui/styles.css" />
+  </head>
+  <body>
+    <div id="game-container"></div>
+
+    <!-- HUD overlay -->
+    <div id="hud" class="overlay hidden">
+      <div class="hud-top">
+        <div class="hud-score">
+          <span class="label">SCORE</span>
+          <span id="hud-score">0</span>
+        </div>
+        <div class="hud-combo">
+          <span class="label">COMBO</span>
+          <span id="hud-combo">0</span>
+        </div>
+        <div class="hud-rally">
+          <span class="label">RALLY</span>
+          <span id="hud-rally">0</span>
+        </div>
+        <div class="hud-mode">
+          <span class="label">MODE</span>
+          <span id="hud-mode">VOICE</span>
+        </div>
+      </div>
+      <div id="stats-panel" class="stats-panel">
+        <h3 id="stats-ball-name">Ball</h3>
+        <div class="stat-row"><span>Trust</span><div class="stat-bar"><div id="stat-trust" class="stat-fill trust"></div></div></div>
+        <div class="stat-row"><span>Resentment</span><div class="stat-bar"><div id="stat-resentment" class="stat-fill resentment"></div></div></div>
+        <div class="stat-row"><span>Ego</span><div class="stat-bar"><div id="stat-ego" class="stat-fill ego"></div></div></div>
+        <div class="stat-row"><span>Chaos</span><div class="stat-bar"><div id="stat-chaos" class="stat-fill chaos"></div></div></div>
+        <div class="stat-row"><span>Attachment</span><div class="stat-bar"><div id="stat-attachment" class="stat-fill attachment"></div></div></div>
+        <div class="stat-row"><span>Drama</span><div class="stat-bar"><div id="stat-dramaNeed" class="stat-fill drama"></div></div></div>
+        <div class="stat-row"><span>Patience</span><div class="stat-bar"><div id="stat-patience" class="stat-fill patience"></div></div></div>
+      </div>
+    </div>
+
+    <!-- Dialogue overlay -->
+    <div id="dialogue-overlay" class="overlay hidden">
+      <div id="hover-banner" class="hover-banner hidden">The ball is hovering.</div>
+      <div id="speech-bubble" class="speech-bubble">
+        <p id="ball-line"></p>
+        <p id="player-response-echo" class="player-response-echo hidden"></p>
+        <p id="ball-reaction" class="ball-reaction hidden"></p>
+        <p id="emotional-result" class="emotional-result hidden"></p>
+      </div>
+      <div id="response-choices" class="response-choices"></div>
+      <div id="text-input-area" class="text-input-area hidden">
+        <input type="text" id="text-response-input" placeholder="Type your response..." />
+        <button id="text-response-submit">Send</button>
+      </div>
+    </div>
+
+    <div id="outburst-label" class="outburst-label hidden"></div>
+    <div id="debug-toast" class="debug-toast hidden"></div>
+
+    <!-- Menu overlay -->
+    <div id="menu-overlay" class="overlay">
+      <div class="menu-content">
+        <h1 class="game-title">BAGGAGE BALL</h1>
+        <p class="tagline">Every ball has emotional baggage. And they are all your problem.</p>
+        <p class="subtitle">Pick your problem:</p>
+        <div id="ball-select" class="ball-select"></div>
+        <div class="controls-hint">
+          <p>Mouse / ← → paddle · T mode · H hover · V clingy · M mode dialogue · R +resent · C +chaos · 1–4 respond</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recap overlay -->
+    <div id="recap-overlay" class="overlay hidden">
+      <div class="recap-content">
+        <h2>Rally Over</h2>
+        <div id="recap-details"></div>
+        <p id="recap-ball-note" class="recap-note"></p>
+        <p id="recap-replay-hook" class="recap-replay-hook hidden"></p>
+        <button id="recap-play-again" class="btn-primary">Play Again</button>
+        <button id="recap-menu" class="btn-secondary">Ball Select</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

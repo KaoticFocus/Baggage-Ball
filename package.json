@@ -1,0 +1,32 @@
+{
+  "name": "baggage-ball",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev:game": "vite --host 0.0.0.0",
+    "dev:ai": "tsx watch server/local-ai-server.ts",
+    "dev": "concurrently \"npm run dev:game\" \"npm run dev:ai\"",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "ai:generate-dialogue": "tsx scripts/generateDialogueMatrix.ts",
+    "generate:dialogue": "npm run ai:generate-dialogue",
+    "generate:dialogue:dry": "tsx scripts/generateDialogueMatrix.ts --dry-run"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "concurrently": "^10.0.3",
+    "tsx": "^4.23.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^5.2.1",
+    "openai": "^4.104.0",
+    "phaser": "^3.87.0",
+    "zod": "^3.25.76"
+  }
+}
