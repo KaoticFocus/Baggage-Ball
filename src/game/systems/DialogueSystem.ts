@@ -143,6 +143,7 @@ export class DialogueSystem {
 
   speakBallLine(text: string, mode: 'voice' | 'text'): void {
     if (mode === 'voice') {
+      // TODO: Route through VoiceSystem.speakBallLine when TTS ships.
       this.voiceAdapter.speak(text);
     }
   }

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
+import { GAME_LAYOUT } from './layout/GameLayout';
 import { MenuScene } from './scenes/MenuScene';
 import { PlayScene } from './scenes/PlayScene';
 import { RecapScene } from './scenes/RecapScene';
@@ -8,8 +9,8 @@ export function createBaggageBallGame(parent: string): Phaser.Game {
   return new Phaser.Game({
     type: Phaser.AUTO,
     parent,
-    width: 800,
-    height: 600,
+    width: GAME_LAYOUT.CANVAS_WIDTH,
+    height: GAME_LAYOUT.CANVAS_HEIGHT,
     backgroundColor: '#0a0a12',
     physics: {
       default: 'arcade',

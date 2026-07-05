@@ -187,7 +187,7 @@ body {
 
 .opponent-bark-bubble {
   position: fixed;
-  z-index: 11;
+  z-index: 8;
   max-width: 200px;
   background: rgba(12, 12, 22, 0.88);
   border: 1px solid #556677;
@@ -206,6 +206,10 @@ body {
 .opponent-bark-bubble.opponent-bark-subtle {
   opacity: 0.45;
   max-width: 160px;
+}
+
+.opponent-bark-bubble.opponent-bark-fading {
+  opacity: 0 !important;
 }
 
 .opponent-bark-name {
@@ -479,13 +483,43 @@ body {
 .stats-panel {
   position: fixed;
   top: 92px;
-  right: 16px;
+  right: auto;
+  left: auto;
   width: 180px;
+  z-index: 7;
   background: rgba(10, 10, 18, 0.9);
   border: 1px solid #2a2a4a;
   border-radius: 6px;
   padding: 0.75rem;
   pointer-events: none;
+  max-height: calc(100vh - 120px);
+  overflow: hidden;
+  transition: width 0.2s ease, padding 0.2s ease, opacity 0.2s ease;
+}
+
+.stats-panel-tab {
+  display: none;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.55rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #8899bb;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  margin: 0 auto;
+}
+
+.stats-panel--compact {
+  width: 52px !important;
+  padding: 0.45rem 0.3rem;
+}
+
+.stats-panel--compact .stats-panel-tab {
+  display: block;
+}
+
+.stats-panel--compact > :not(.stats-panel-tab) {
+  display: none;
 }
 
 .stats-panel h3 {
@@ -564,6 +598,74 @@ body {
 /* ── Dialogue ── */
 #dialogue-overlay {
   pointer-events: none;
+}
+
+#dialogue-overlay:not(.hidden) .dialogue-cluster {
+  pointer-events: auto;
+}
+
+.dialogue-cluster {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: min(520px, calc(100vw - 48px));
+  max-height: min(72vh, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  z-index: 25;
+  pointer-events: auto;
+}
+
+.dialogue-cluster-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: rgba(12, 12, 24, 0.92);
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.dialogue-cluster-header:active {
+  cursor: grabbing;
+}
+
+.dialogue-drag-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #ff4466;
+  flex: 1;
+}
+
+.dialogue-drag-hint {
+  font-size: 0.58rem;
+  letter-spacing: 0.06em;
+  color: #667788;
+}
+
+.dialogue-panel-reset {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.45rem;
+  background: rgba(20, 20, 40, 0.95);
+  border: 1px solid #334;
+  border-radius: 4px;
+  color: #8899bb;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.dialogue-panel-reset:hover {
+  border-color: #00e5ff;
+  color: #00e5ff;
 }
 
 #dialogue-overlay:not(.hidden) .response-panel {
@@ -683,10 +785,10 @@ body {
 
 
 .speech-bubble {
-  position: fixed;
-  transform: translate(-50%, -100%);
-  width: min(280px, calc(100vw - 340px));
-  max-width: 280px;
+  position: relative;
+  transform: none;
+  width: 100%;
+  max-width: none;
   max-height: 140px;
   overflow-y: auto;
   background: rgba(15, 15, 30, 0.95);
@@ -695,28 +797,19 @@ body {
   padding: 0.85rem;
   box-shadow: 0 0 20px rgba(255, 68, 102, 0.2);
   pointer-events: none;
-  z-index: 20;
+  z-index: 1;
 }
 
 .speech-bubble.bubble-below {
-  transform: translate(-50%, 0);
+  transform: none;
 }
 
 .speech-bubble::after {
-  content: '';
-  position: absolute;
-  bottom: -8px;
-  left: 50%;
-  transform: translateX(-50%);
-  border: 8px solid transparent;
-  border-top-color: #ff4466;
+  display: none;
 }
 
 .speech-bubble.bubble-below::after {
-  bottom: auto;
-  top: -8px;
-  border-top-color: transparent;
-  border-bottom-color: #ff4466;
+  display: none;
 }
 
 #ball-line {
@@ -737,16 +830,16 @@ body {
 }
 
 .response-panel {
-  position: fixed;
-  left: 50%;
-  bottom: 12px;
-  transform: translateX(-50%);
-  width: min(520px, calc(100vw - 48px));
-  max-height: min(38vh, 320px);
+  position: relative;
+  left: auto;
+  bottom: auto;
+  transform: none;
+  width: 100%;
+  max-height: min(38vh, 280px);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  z-index: 25;
+  z-index: 1;
   pointer-events: auto;
 }
 

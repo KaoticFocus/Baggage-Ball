@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import type { BallStats, BehaviorModifier } from '../types/BallTypes';
 import type { PaddleSide } from '../settings/PlayerSettings';
+import { logBallSpeed } from './VoiceSystem';
 
 export class BehaviorModifierSystem {
   activeModifier: BehaviorModifier | null = null;
@@ -51,7 +52,29 @@ const OUTBURST_LABELS: Partial<Record<BehaviorModifier, string>> = {
   speedUp: 'Speed surge!',
 };
 
-const BASE_SPEED = 280;
+/** Rally speed tuning — serve ~330–380, cap ~780. */
+export const BALL_SPEED = {
+  BASE: 360,
+  SERVE_FACTOR: 0.92,
+  PER_HIT_MULTIPLIER: 1.055,
+  MIN: 220,
+  MAX: 780,
+} as const;
+
+/** @deprecated Use BALL_SPEED.BASE */
+export const BASE_SPEED = BALL_SPEED.BASE;
+
+export function accelerateBallAfterHit(body: Phaser.Physics.Arcade.Body): void {
+  const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.y ** 2);
+  if (speed <= 0) return;
+
+  const boosted = Math.min(speed * BALL_SPEED.PER_HIT_MULTIPLIER, BALL_SPEED.MAX);
+  body.setVelocity(
+    (body.velocity.x / speed) * boosted,
+    (body.velocity.y / speed) * boosted
+  );
+  logBallSpeed(body, 'afterHit');
+}
 
 export function applyBehaviorToVelocity(
   body: Phaser.Physics.Arcade.Body,
@@ -133,19 +156,18 @@ export function applyBehaviorToVelocity(
   }
 
   const newSpeed = Math.sqrt(vx * vx + vy * vy);
-  const minSpeed = BASE_SPEED * 0.55;
-  const maxSpeed = BASE_SPEED * (stats && stats.chaos > 75 ? 2.0 : 1.85);
-  const clampedSpeed = Phaser.Math.Clamp(newSpeed || BASE_SPEED, minSpeed, maxSpeed);
+  const chaosCap = stats && stats.chaos > 75 ? BALL_SPEED.MAX : BALL_SPEED.MAX * 0.95;
+  const clampedSpeed = Phaser.Math.Clamp(newSpeed || BALL_SPEED.BASE, BALL_SPEED.MIN, chaosCap);
   if (newSpeed > 0) {
     vx = (vx / newSpeed) * clampedSpeed;
     vy = (vy / newSpeed) * clampedSpeed;
   }
 
-  if (Math.abs(vx) < 80) {
-    vx = vx >= 0 ? 100 : -100;
+  if (Math.abs(vx) < 100) {
+    vx = vx >= 0 ? 120 : -120;
   }
-  if (Math.abs(vy) < 60) {
-    vy = vy >= 0 ? 70 : -70;
+  if (Math.abs(vy) < 80) {
+    vy = vy >= 0 ? 90 : -90;
   }
 
   body.setVelocity(vx, vy);
@@ -160,9 +182,11 @@ export function launchBall(
   const dir = toward === 'right' ? 1 : -1;
   const angleDeg = Phaser.Math.Between(options?.serve ? -22 : -32, options?.serve ? 22 : 32);
   const rad = Phaser.Math.DegToRad(angleDeg);
-  const speed = BASE_SPEED * speedMultiplier * (options?.serve ? 0.78 : 1);
+  const serveFactor = options?.serve ? BALL_SPEED.SERVE_FACTOR : 1;
+  const speed = BALL_SPEED.BASE * speedMultiplier * serveFactor;
 
   body.setVelocity(Math.cos(rad) * speed * dir, Math.sin(rad) * speed);
+  logBallSpeed(body, options?.serve ? 'serve' : 'launch');
 }
 
 export function reflectVerticalPaddle(
@@ -181,7 +205,7 @@ export function reflectVerticalPaddle(
     angleDeg += (Math.random() - 0.5) * 36;
   }
 
-  const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.y ** 2) || BASE_SPEED;
+  const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.y ** 2) || BALL_SPEED.BASE;
   const awaySign = paddleSide === 'left' ? 1 : -1;
   const rad = Phaser.Math.DegToRad(angleDeg);
   const vx = Math.abs(Math.cos(rad) * speed) * awaySign;
@@ -206,9 +230,9 @@ export function reflectPaddle(
     bounceAngle += (Math.random() - 0.5) * 40;
   }
 
-  const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.y ** 2) || BASE_SPEED;
+  const speed = Math.sqrt(body.velocity.x ** 2 + body.velocity.y ** 2) || BALL_SPEED.BASE;
   const rad = Phaser.Math.DegToRad(bounceAngle - 90);
   body.setVelocity(Math.cos(rad) * speed, -Math.abs(Math.sin(rad) * speed));
 }
 
-export { BASE_SPEED, OUTBURST_LABELS };
+export { OUTBURST_LABELS };

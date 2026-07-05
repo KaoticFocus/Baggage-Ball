@@ -4,7 +4,6 @@ import type {
   OpponentId,
 } from '../types/OpponentTypes';
 import { getOpponentProfile, opponentMonologues } from '../data/opponentMonologues';
-import type { PaddleSide } from '../settings/PlayerSettings';
 
 export type BarkResult = {
   text: string;
@@ -171,10 +170,6 @@ export class OpponentBarkSystem {
       return null;
     }
 
-    if (this.countdownActive && situation === 'randomGameplay') {
-      return null;
-    }
-
     if (this.ballHoverActive && !allowDuringHover && situation === 'randomGameplay') {
       return null;
     }
@@ -254,7 +249,7 @@ export class OpponentBarkSystem {
   }
 
   private scheduleNextRandom(): void {
-    this.nextRandomAt = 12_000 + Math.random() * 8_000;
+    this.nextRandomAt = 8_000 + Math.random() * 6_000;
   }
 
   private gameNow(): number {
@@ -277,33 +272,4 @@ export function opponentPaddleToScreen(
     x: canvasRect.left + (paddleX / gameWidth) * canvasRect.width,
     y: canvasRect.top + (paddleY / gameHeight) * canvasRect.height,
   };
-}
-
-export function positionOpponentBarkBubble(
-  bubble: HTMLElement,
-  screenX: number,
-  screenY: number,
-  opponentSide: PaddleSide,
-  canvasBounds: { left: number; top: number; right: number; bottom: number },
-  ballDialogueVisible: boolean
-): void {
-  bubble.classList.toggle('opponent-bark-subtle', ballDialogueVisible);
-
-  const offsetX = opponentSide === 'left' ? 72 : -72;
-  let x = screenX + offsetX;
-  let y = screenY - 40;
-
-  const rect = bubble.getBoundingClientRect();
-  const pad = 12;
-  const maxX = canvasBounds.right - rect.width / 2 - pad;
-  const minX = canvasBounds.left + rect.width / 2 + pad;
-  const minY = canvasBounds.top + pad + rect.height;
-  const maxY = canvasBounds.bottom - 120;
-
-  x = Math.min(maxX, Math.max(minX, x));
-  y = Math.min(maxY, Math.max(minY, y));
-
-  bubble.style.left = `${x}px`;
-  bubble.style.top = `${y}px`;
-  bubble.style.transform = 'translate(-50%, -100%)';
 }

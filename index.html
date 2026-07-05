@@ -36,6 +36,7 @@
       </div>
       <div id="pause-banner" class="pause-banner hidden">PAUSED</div>
       <div id="stats-panel" class="stats-panel">
+        <span class="stats-panel-tab">Stats</span>
         <h3 id="stats-ball-name">Ball</h3>
         <div class="hud-meta">
           <span class="label">HOVER</span>
@@ -58,19 +59,26 @@
     <!-- Dialogue overlay -->
     <div id="dialogue-overlay" class="overlay hidden">
       <div id="hover-banner" class="hover-banner hidden">The ball is hovering.</div>
-      <div id="speech-bubble" class="speech-bubble">
-        <p id="ball-line"></p>
-        <p id="player-response-echo" class="player-response-echo hidden"></p>
-        <p id="ball-reaction" class="ball-reaction hidden"></p>
-        <p id="emotional-result" class="emotional-result hidden"></p>
-      </div>
-      <aside id="response-panel" class="response-panel">
-        <div id="response-choices" class="response-choices"></div>
-        <div id="text-input-area" class="text-input-area hidden">
-          <input type="text" id="text-response-input" placeholder="Type your response..." />
-          <button id="text-response-submit">Send</button>
+      <div id="dialogue-cluster" class="dialogue-cluster">
+        <div id="dialogue-drag-handle" class="dialogue-cluster-header">
+          <span class="dialogue-drag-title">Ball dialogue</span>
+          <span class="dialogue-drag-hint">Drag to move</span>
+          <button type="button" id="dialogue-panel-reset" class="dialogue-panel-reset">Reset</button>
         </div>
-      </aside>
+        <div id="speech-bubble" class="speech-bubble">
+          <p id="ball-line"></p>
+          <p id="player-response-echo" class="player-response-echo hidden"></p>
+          <p id="ball-reaction" class="ball-reaction hidden"></p>
+          <p id="emotional-result" class="emotional-result hidden"></p>
+        </div>
+        <aside id="response-panel" class="response-panel">
+          <div id="response-choices" class="response-choices"></div>
+          <div id="text-input-area" class="text-input-area hidden">
+            <input type="text" id="text-response-input" placeholder="Type your response..." />
+            <button id="text-response-submit">Send</button>
+          </div>
+        </aside>
+      </div>
     </div>
 
     <div id="outburst-label" class="outburst-label hidden"></div>

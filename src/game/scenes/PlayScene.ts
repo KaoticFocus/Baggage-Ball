@@ -7,6 +7,8 @@ import { ScoringSystem } from '../systems/ScoringSystem';
 import {
   BehaviorModifierSystem,
   applyBehaviorToVelocity,
+  accelerateBallAfterHit,
+  BALL_SPEED,
   launchBall,
   reflectVerticalPaddle,
 } from '../systems/BehaviorModifierSystem';
@@ -34,6 +36,13 @@ import {
 } from '../settings/PlayerSettings';
 import type { OpponentBarkSituation } from '../types/OpponentTypes';
 import { uiManager } from '../../ui/UIManager';
+import {
+  computePlayfield,
+  GAME_LAYOUT,
+  getPlayfieldCenterX,
+  getSidePaddleX as layoutPaddleX,
+  type PlayfieldRect,
+} from '../layout/GameLayout';
 import type { ScreenBounds } from '../../ui/dialogueBubbleLayout';
 
 type GameState = 'intro' | 'countdown' | 'playing' | 'hover' | 'pointBreak' | 'matchEnd';
@@ -74,6 +83,7 @@ export class PlayScene extends Phaser.Scene {
   private playerModeHistory: string[] = ['voice'];
   private storedVelocity = { x: 0, y: 0 };
   private currentHoverType = '';
+  private playfield!: PlayfieldRect;
   private playfieldTop = 20;
   private playfieldBottom = 0;
   private playfieldLeft = 20;
@@ -83,12 +93,12 @@ export class PlayScene extends Phaser.Scene {
   private failsafeCheckTimer = 0;
   private isPaused = false;
   private serveLock = false;
+  private pausedTimeScale = 1;
 
-  private readonly PADDLE_THICKNESS = 14;
-  private readonly PADDLE_LENGTH = 96;
+  private readonly PADDLE_THICKNESS = GAME_LAYOUT.PADDLE_THICKNESS;
+  private readonly PADDLE_LENGTH = GAME_LAYOUT.PADDLE_LENGTH;
   private readonly BALL_RADIUS = 12;
-  private readonly PLAYFIELD_BOTTOM_UI = 100;
-  private readonly SIDE_MISS_MARGIN = 30;
+  private readonly SIDE_MISS_MARGIN = GAME_LAYOUT.SIDE_MISS_MARGIN;
 
   constructor() {
     super({ key: 'PlayScene' });
@@ -126,23 +136,20 @@ export class PlayScene extends Phaser.Scene {
     };
     const colors = ballColors[this.ballId] ?? ballColors.orb;
 
-    this.playfieldLeft = 20;
-    this.playfieldRight = width - 20;
-    this.playfieldTop = 20;
-    this.playfieldBottom = height - this.PLAYFIELD_BOTTOM_UI;
-    this.paddleMinY = this.playfieldTop + this.PADDLE_LENGTH / 2 + 4;
-    this.paddleMaxY = this.playfieldBottom - this.PADDLE_LENGTH / 2 - 4;
+    this.applyPlayfieldLayout(width, height);
 
     this.add.rectangle(width / 2, height / 2, width, height, 0x0a0a12);
 
     this.hoverDim = this.add.rectangle(width / 2, height / 2, width, height, 0x000008, 0);
     this.hoverDim.setDepth(5);
 
+    this.drawHudGutter();
     this.drawPlayfieldBorder();
 
     const playerX = this.getSidePaddleX(this.playerSide);
     const opponentX = this.getSidePaddleX(getOpponentPaddleSide(this.playerSide));
     const startY = (this.playfieldTop + this.playfieldBottom) / 2;
+    const ballStartX = getPlayfieldCenterX(this.playfield);
 
     this.playerPaddle = this.add.rectangle(
       playerX,
@@ -171,16 +178,15 @@ export class PlayScene extends Phaser.Scene {
     this.opponentPaddleBody.setAllowGravity(false);
     this.opponentAi.reset(startY);
 
-    this.ballGlow = this.add.circle(width / 2, startY, this.BALL_RADIUS + 8, colors.fill, 0.25);
+    this.ballGlow = this.add.circle(ballStartX, startY, this.BALL_RADIUS + 8, colors.fill, 0.25);
     this.ballGlow.setDepth(6);
 
-    this.ball = this.add.circle(width / 2, startY, this.BALL_RADIUS, colors.fill);
+    this.ball = this.add.circle(ballStartX, startY, this.BALL_RADIUS, colors.fill);
     this.ball.setStrokeStyle(3, colors.stroke, 0.9);
     this.ball.setDepth(7);
     this.physics.add.existing(this.ball);
     this.ballBody = this.ball.body as Phaser.Physics.Arcade.Body;
     this.ballBody.setCircle(this.BALL_RADIUS);
-    this.ballBody.setCollideWorldBounds(true);
     this.ballBody.onWorldBounds = true;
     this.physics.world.on(
       'worldbounds',
@@ -200,7 +206,10 @@ export class PlayScene extends Phaser.Scene {
       }
     );
     this.ballBody.setBounce(1, 1);
-    this.ballBody.setMaxVelocity(550, 550);
+    this.ballBody.setMaxVelocity(BALL_SPEED.MAX, BALL_SPEED.MAX);
+    this.ballBody.setCollideWorldBounds(true);
+    this.physics.world.checkCollision.left = false;
+    this.physics.world.checkCollision.right = false;
 
     this.hoverMorph = new BallHoverMorph(
       this,
@@ -234,6 +243,7 @@ export class PlayScene extends Phaser.Scene {
       onQuit: () => this.quitToMenu(),
     });
     this.updateUI();
+    this.syncUILayout();
     this.startMatchFlow();
 
     this.physics.add.collider(
@@ -249,6 +259,53 @@ export class PlayScene extends Phaser.Scene {
       () => this.onOpponentPaddleHit(),
       undefined,
       this
+    );
+  }
+
+  private applyPlayfieldLayout(canvasWidth: number, canvasHeight: number): void {
+    this.playfield = computePlayfield(canvasWidth, canvasHeight);
+    this.playfieldLeft = this.playfield.left;
+    this.playfieldRight = this.playfield.right;
+    this.playfieldTop = this.playfield.top;
+    this.playfieldBottom = this.playfield.bottom;
+    this.paddleMinY = this.playfieldTop + this.PADDLE_LENGTH / 2 + 4;
+    this.paddleMaxY = this.playfieldBottom - this.PADDLE_LENGTH / 2 - 4;
+  }
+
+  private drawHudGutter(): void {
+    const { height } = this.scale;
+    const hudCenterX = this.playfield.rightHudLeft + this.playfield.rightHudWidth / 2;
+
+    this.add
+      .rectangle(hudCenterX, height / 2, this.playfield.rightHudWidth, height, 0x0c0c16, 1)
+      .setDepth(1);
+
+    const divider = this.add.graphics();
+    divider.lineStyle(1, 0x2a2a4a, 0.85);
+    divider.lineBetween(this.playfield.right, this.playfield.top, this.playfield.right, this.playfield.bottom);
+    divider.setDepth(3);
+  }
+
+  private syncUILayout(): void {
+    const bounds = this.getCanvasScreenBounds();
+    uiManager.setCanvasBounds(bounds);
+    const canvasScreenWidth = bounds.right - bounds.left;
+    const compactStats =
+      canvasScreenWidth < GAME_LAYOUT.NARROW_CANVAS_PX && this.shouldCompactStatsPanel();
+    uiManager.syncPlayfieldLayout(
+      bounds,
+      this.playfield,
+      { width: this.scale.width, height: this.scale.height },
+      { compactStats, playerSide: this.playerSide }
+    );
+  }
+
+  private shouldCompactStatsPanel(): boolean {
+    if (this.isPaused || this.gameState === 'hover') return false;
+    return (
+      this.gameState === 'playing' ||
+      this.gameState === 'countdown' ||
+      this.gameState === 'pointBreak'
     );
   }
 
@@ -284,7 +341,7 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private getSidePaddleX(side: PaddleSide): number {
-    return side === 'left' ? this.playfieldLeft + 24 : this.playfieldRight - 24;
+    return layoutPaddleX(side, this.playfield);
   }
 
   private resetRoundState(): void {
@@ -304,7 +361,7 @@ export class PlayScene extends Phaser.Scene {
 
   private centerBall(): void {
     const centerY = (this.playfieldTop + this.playfieldBottom) / 2;
-    this.ball.setPosition(this.scale.width / 2, centerY);
+    this.ball.setPosition(getPlayfieldCenterX(this.playfield), centerY);
     this.ballBody.reset(this.ball.x, this.ball.y);
     this.ballBody.setVelocity(0, 0);
   }
@@ -358,14 +415,15 @@ export class PlayScene extends Phaser.Scene {
     this.opponentBarkSystem.setCountdownActive(true);
 
     const steps = ['3', '2', '1', 'BOUNCE'];
+    const stepMs = 450;
     steps.forEach((step, index) => {
-      this.time.delayedCall(index * 500, () => {
+      this.time.delayedCall(index * stepMs, () => {
         if (this.gameState !== 'countdown') return;
         uiManager.showCountdown(step);
       });
     });
 
-    this.time.delayedCall(steps.length * 500, () => {
+    this.time.delayedCall(steps.length * stepMs, () => {
       if (this.gameState !== 'countdown') return;
       uiManager.hideCountdown();
       this.opponentBarkSystem.setCountdownActive(false);
@@ -377,6 +435,7 @@ export class PlayScene extends Phaser.Scene {
     this.gameState = 'playing';
     this.emotionDirector.resetForRally();
     this.opponentBarkSystem.resetForRally();
+    this.opponentAi.beginRally();
     this.scoring.resetCombo();
     this.nearMissTriggered = false;
     this.lastLongRallyMilestone = 0;
@@ -417,10 +476,14 @@ export class PlayScene extends Phaser.Scene {
     this.centerBall();
     this.updateUI();
 
+    console.log(
+      `[Score] player=${this.matchSystem.playerPoints} opponent=${this.matchSystem.opponentPoints} (${winner} scored)`
+    );
+
     if (this.matchSystem.isOver()) {
-      this.time.delayedCall(1800, () => this.endMatch());
+      this.time.delayedCall(1200, () => this.endMatch());
     } else {
-      this.time.delayedCall(1800, () => this.runServeCountdown());
+      this.time.delayedCall(1200, () => this.runServeCountdown());
     }
   }
 
@@ -473,7 +536,11 @@ export class PlayScene extends Phaser.Scene {
       }
       this.fireOpponentBark('randomGameplay', { force: true });
     });
-    kb.on('keydown-R', () => {
+    kb.on('keydown-R', (event: KeyboardEvent) => {
+      if (event.shiftKey) {
+        uiManager.resetDialoguePanelPosition();
+        return;
+      }
       this.personality.updateStats({ resentment: 15 });
       uiManager.updateStats(this.personality.getStats());
       uiManager.updateBallMeta(
@@ -509,6 +576,14 @@ export class PlayScene extends Phaser.Scene {
       );
       uiManager.showDebugToast('+Attachment');
     });
+    kb.on('keydown-[', () => {
+      this.opponentAi.adjustDifficulty(-1);
+      uiManager.showDebugToast(`Opponent: ${this.opponentAi.getDifficultyTier()}`);
+    });
+    kb.on('keydown-]', () => {
+      this.opponentAi.adjustDifficulty(1);
+      uiManager.showDebugToast(`Opponent: ${this.opponentAi.getDifficultyTier()}`);
+    });
     kb.on('keydown-SPACE', () => {
       if (this.gameState === 'hover') this.selectResponse(0);
     });
@@ -523,6 +598,8 @@ export class PlayScene extends Phaser.Scene {
     if (this.gameState === 'matchEnd') return;
 
     this.ballGlow.setPosition(this.ball.x, this.ball.y);
+
+    this.syncUILayout();
 
     if (this.isPaused) {
       if (this.gameState === 'playing') {
@@ -547,6 +624,8 @@ export class PlayScene extends Phaser.Scene {
     }
 
     this.movePlayerPaddle(delta);
+
+    const stats = this.personality.getStats();
     this.opponentAi.update(
       delta,
       this.opponentPaddle,
@@ -554,16 +633,19 @@ export class PlayScene extends Phaser.Scene {
       this.ball.x,
       this.ball.y,
       this.ballBody.velocity.x,
+      this.ballBody.velocity.y,
       getOpponentPaddleSide(this.playerSide),
       this.paddleMinY,
-      this.paddleMaxY
+      this.paddleMaxY,
+      Math.sqrt(this.ballBody.velocity.x ** 2 + this.ballBody.velocity.y ** 2),
+      this.scoring.currentRallyHits,
+      stats.chaos
     );
 
     if (this.wallBounceCooldown > 0) {
       this.wallBounceCooldown -= delta;
     }
 
-    const stats = this.personality.getStats();
     applyBehaviorToVelocity(
       this.ballBody,
       this.behaviorMod.activeModifier,
@@ -700,6 +782,7 @@ export class PlayScene extends Phaser.Scene {
       gentle,
       this.personality.getStats()
     );
+    accelerateBallAfterHit(this.ballBody);
 
     const stats = this.personality.getStats();
 
@@ -768,6 +851,7 @@ export class PlayScene extends Phaser.Scene {
       getOpponentPaddleSide(this.playerSide),
       false
     );
+    accelerateBallAfterHit(this.ballBody);
   }
 
   private toggleInputMode(): void {
@@ -829,6 +913,8 @@ export class PlayScene extends Phaser.Scene {
 
     this.hoverMorph.enter(this.personality.getStats());
     this.opponentBarkSystem.setBallHoverActive(true);
+    uiManager.suppressOpponentBarkForDialogue();
+    this.syncUILayout();
     this.fireOpponentBark('ballHoverStarts', { allowDuringHover: true });
 
     this.dialogue.speakBallLine(event.ballLine, this.inputMode.getMode());
@@ -951,6 +1037,7 @@ export class PlayScene extends Phaser.Scene {
 
     uiManager.hideDialogue();
     uiManager.updateBallMeta('', this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId));
+    this.syncUILayout();
 
     const stats = this.personality.getStats();
     const speedMult = this.personality.getSpeedMultiplier();
@@ -1004,40 +1091,47 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private showOpponentBarkUi(result: BarkResult): void {
+    const layout = this.buildOpponentBarkLayoutInput();
+    uiManager.showOpponentBark(result, layout);
+  }
+
+  private buildOpponentBarkLayoutInput() {
     const canvas = this.game.canvas;
     const rect = canvas.getBoundingClientRect();
-    const screen = opponentPaddleToScreen(
+    const opponentScreen = opponentPaddleToScreen(
       this.opponentPaddle.x,
       this.opponentPaddle.y,
       rect,
       this.scale.width,
       this.scale.height
     );
-    uiManager.showOpponentBark(
-      result,
-      screen.x,
-      screen.y,
+    const ballScreen =
+      this.gameState === 'playing' || this.gameState === 'hover'
+        ? this.ballToScreen(this.ball.x, this.ball.y)
+        : undefined;
+
+    return uiManager.buildOpponentBarkLayout(
+      opponentScreen,
       getOpponentPaddleSide(this.playerSide),
-      this.getCanvasScreenBounds()
+      this.getCanvasScreenBounds(),
+      {
+        left: this.playfieldLeft,
+        right: this.playfieldRight,
+        top: this.playfieldTop,
+        bottom: this.playfieldBottom,
+      },
+      { width: this.scale.width, height: this.scale.height },
+      ballScreen
     );
   }
 
   private refreshOpponentBarkBubble(): void {
-    const canvas = this.game.canvas;
-    const rect = canvas.getBoundingClientRect();
-    const screen = opponentPaddleToScreen(
-      this.opponentPaddle.x,
-      this.opponentPaddle.y,
-      rect,
-      this.scale.width,
-      this.scale.height
-    );
-    uiManager.updateOpponentBarkPosition(
-      screen.x,
-      screen.y,
-      getOpponentPaddleSide(this.playerSide),
-      this.getCanvasScreenBounds()
-    );
+    if (this.opponentBarkBubbleIsHidden()) return;
+    uiManager.updateOpponentBarkPosition(this.buildOpponentBarkLayoutInput());
+  }
+
+  private opponentBarkBubbleIsHidden(): boolean {
+    return document.getElementById('opponent-bark-bubble')?.classList.contains('hidden') ?? true;
   }
 
   private updateUI(): void {
@@ -1073,6 +1167,8 @@ export class PlayScene extends Phaser.Scene {
     if (this.isPaused || this.gameState === 'matchEnd') return;
 
     this.isPaused = true;
+    this.pausedTimeScale = this.time.timeScale;
+    this.time.timeScale = 0;
 
     if (this.gameState === 'playing') {
       this.storedVelocity.x = this.ballBody.velocity.x;
@@ -1085,6 +1181,7 @@ export class PlayScene extends Phaser.Scene {
     this.emotionDirector.pauseTimers();
     this.opponentBarkSystem.pauseTimers();
     uiManager.setPaused(true);
+    this.syncUILayout();
     this.fireOpponentBark('pausePressed');
   }
 
@@ -1092,11 +1189,13 @@ export class PlayScene extends Phaser.Scene {
     if (!this.isPaused) return;
 
     this.isPaused = false;
+    this.time.timeScale = this.pausedTimeScale;
     this.physics.resume();
     this.time.paused = false;
     this.emotionDirector.resumeTimers();
     this.opponentBarkSystem.resumeTimers();
     uiManager.setPaused(false);
+    this.syncUILayout();
 
     if (this.gameState === 'playing') {
       const speed = Math.abs(this.storedVelocity.x) + Math.abs(this.storedVelocity.y);
