@@ -5,7 +5,6 @@ import { BOLT_DIALOGUES } from './dialogues/boltDialogues';
 import { VALENTINE_DIALOGUES } from './dialogues/valentineDialogues';
 import {
   generatedDialogueEvents,
-  GENERATED_DIALOGUE_EVENTS,
 } from './generatedDialogueEvents';
 
 type RawGeneratedEvent = {
@@ -46,10 +45,11 @@ function normalizeGenerated(raw: RawGeneratedEvent): DialogueEvent {
   };
 }
 
-const FROM_CONST = (generatedDialogueEvents as readonly RawGeneratedEvent[]).map(normalizeGenerated);
+const FROM_CONST = (generatedDialogueEvents as unknown as readonly RawGeneratedEvent[]).map(
+  normalizeGenerated
+);
 
-export const GENERATED_DIALOGUES: DialogueEvent[] =
-  GENERATED_DIALOGUE_EVENTS.length > 0 ? GENERATED_DIALOGUE_EVENTS : FROM_CONST;
+export const GENERATED_DIALOGUES: DialogueEvent[] = FROM_CONST;
 
 export const HAND_AUTHORED_DIALOGUES: DialogueEvent[] = [
   ...ORB_DIALOGUES,

@@ -1,0 +1,40 @@
+---
+description: Baggage Ball arena is a three-sided playfield with an open bottom failure zone
+alwaysApply: true
+---
+
+# Arena: Three-Sided Playfield
+
+The arena is a **three-sided playfield**. The bottom is an **open failure zone**, not a wall.
+
+## Visual design
+
+- Draw borders on **left, top, and right** only.
+- Do **not** draw a bottom border on the playfield.
+- The bottom should read as open/dangerous (e.g. faint red glow below the paddle), not as a bounce surface.
+
+## Physics & gameplay
+
+- The ball must **not** collide with or bounce off a bottom wall.
+- World bounds may extend below the visible playfield so the ball can fall through after a miss.
+- End the rally when the ball passes below the playfield (e.g. `ball.y > playfieldBottom + margin` → `endRound()`).
+- Do **not** clamp the ball inside the playfield after it passes the paddle.
+
+## Allowed bounces
+
+The ball may bounce only off:
+
+- Left wall
+- Right wall
+- Top wall
+- Paddle
+
+## When changing playfield code
+
+Before adding borders, bounds, or collision:
+
+1. Confirm the bottom stays open.
+2. Confirm a miss ends the rally instead of bouncing.
+3. Avoid reintroducing a full `strokeRect` or bottom world-bound collision.
+
+Primary reference: `src/game/scenes/PlayScene.ts`.

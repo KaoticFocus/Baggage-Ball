@@ -4,6 +4,7 @@ import {
   getEventsBySituation,
   getEventsForBall,
 } from '../data/dialogueRegistry';
+import { getHoverFallback } from '../data/hoverFallbackDialogues';
 import {
   createRuntimeDialogueAdapter,
   type RuntimeDialogueAdapter,
@@ -78,7 +79,9 @@ export class LocalDialogueProvider implements DialogueProvider {
 
     const unused = candidates.filter((e) => !this.usedEventIds.has(e.id));
     const pool = unused.length > 0 ? unused : candidates;
-    if (pool.length === 0) return null;
+    if (pool.length === 0) {
+      return getHoverFallback(ballId, situation);
+    }
 
     const event = pool[Math.floor(Math.random() * pool.length)];
     this.usedEventIds.add(event.id);

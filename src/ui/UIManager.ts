@@ -3,6 +3,11 @@ import { BALL_PERSONALITIES } from '../game/data/ballPersonalities';
 import { STAT_KEYS } from '../game/types/BallTypes';
 import { formatStatLabel } from '../game/systems/RecapSystem';
 import type { RecapData, BallStats } from '../game/types/BallTypes';
+import {
+  positionDialogueBubbleNearBall,
+  truncateHoverText,
+  type ScreenBounds,
+} from './dialogueBubbleLayout';
 
 export class UIManager {
   private menuOverlay = document.getElementById('menu-overlay')!;
@@ -17,8 +22,14 @@ export class UIManager {
   private onCustomResponseSubmitted?: (text: string) => void;
   private onRecapPlayAgain?: () => void;
   private onRecapMenu?: () => void;
+  private onPauseToggle?: () => void;
+  private onQuit?: () => void;
+  private pauseBtn = document.getElementById('hud-pause-btn') as HTMLButtonElement;
+  private pauseBanner = document.getElementById('pause-banner')!;
   private debugToastTimer: ReturnType<typeof setTimeout> | null = null;
   private customInputVisible = false;
+  private canvasBounds: ScreenBounds | null = null;
+  private lastBallScreen = { x: 0, y: 0 };
 
   constructor() {
     this.renderBallSelect();
@@ -42,6 +53,9 @@ export class UIManager {
     document.getElementById('text-response-input')!.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this.handleTextSubmit();
     });
+
+    this.pauseBtn.addEventListener('click', () => this.onPauseToggle?.());
+    document.getElementById('hud-quit-btn')!.addEventListener('click', () => this.onQuit?.());
   }
 
   setCallbacks(callbacks: {
@@ -51,6 +65,8 @@ export class UIManager {
     onCustomResponseSubmitted?: (text: string) => void;
     onRecapPlayAgain?: () => void;
     onRecapMenu?: () => void;
+    onPauseToggle?: () => void;
+    onQuit?: () => void;
   }): void {
     if (callbacks.onBallSelected !== undefined) this.onBallSelected = callbacks.onBallSelected;
     if (callbacks.onResponseSelected !== undefined) this.onResponseSelected = callbacks.onResponseSelected;
@@ -62,10 +78,37 @@ export class UIManager {
     }
     if (callbacks.onRecapPlayAgain !== undefined) this.onRecapPlayAgain = callbacks.onRecapPlayAgain;
     if (callbacks.onRecapMenu !== undefined) this.onRecapMenu = callbacks.onRecapMenu;
+    if (callbacks.onPauseToggle !== undefined) this.onPauseToggle = callbacks.onPauseToggle;
+    if (callbacks.onQuit !== undefined) this.onQuit = callbacks.onQuit;
+  }
+
+  setGameControlCallbacks(callbacks: {
+    onPauseToggle?: () => void;
+    onQuit?: () => void;
+  }): void {
+    if (callbacks.onPauseToggle !== undefined) this.onPauseToggle = callbacks.onPauseToggle;
+    if (callbacks.onQuit !== undefined) this.onQuit = callbacks.onQuit;
+  }
+
+  setPaused(paused: boolean): void {
+    this.pauseBtn.textContent = paused ? 'Play' : 'Pause';
+    this.pauseBanner.classList.toggle('hidden', !paused);
+  }
+
+  resetGameControls(): void {
+    this.setPaused(false);
   }
 
   setBallSelectHandler(handler: (ballId: string) => void): void {
     this.ballSelectHandler = handler;
+  }
+
+  setCanvasBounds(bounds: ScreenBounds): void {
+    this.canvasBounds = bounds;
+    this.positionHoverBanner(bounds);
+    if (!this.dialogueOverlay.classList.contains('hidden')) {
+      this.repositionBubble();
+    }
   }
 
   private handleBallSelect(ballId: string): void {
@@ -104,6 +147,7 @@ export class UIManager {
     this.menuOverlay.classList.add('hidden');
     this.recapOverlay.classList.add('hidden');
     this.hud.classList.remove('hidden');
+    this.resetGameControls();
     document.getElementById('stats-ball-name')!.textContent = ballName;
   }
 
@@ -121,24 +165,36 @@ export class UIManager {
     }
   }
 
+  updateBallMeta(hoverType: string, mood: string): void {
+    const hoverEl = document.getElementById('hud-hover-type');
+    const moodEl = document.getElementById('hud-mood');
+    if (hoverEl) hoverEl.textContent = hoverType || '—';
+    if (moodEl) moodEl.textContent = mood;
+  }
+
   showDialogue(
     event: DialogueEvent,
     _mode: InputMode,
     ballScreenX: number,
     ballScreenY: number,
-    isHover = false
+    isHover = false,
+    hoverType = '',
+    mood = '',
+    canvasBounds?: ScreenBounds
   ): void {
     this.customInputVisible = false;
+    this.lastBallScreen = { x: ballScreenX, y: ballScreenY };
+    if (canvasBounds) this.canvasBounds = canvasBounds;
+
     this.dialogueOverlay.classList.remove('hidden');
-    const bubble = document.getElementById('speech-bubble')!;
-    bubble.style.left = `${ballScreenX}px`;
-    bubble.style.top = `${ballScreenY - 90}px`;
+    document.getElementById('response-panel')!.classList.remove('hidden');
 
     document.getElementById('hover-banner')!.classList.toggle('hidden', !isHover);
-    document.getElementById('ball-line')!.textContent = event.ballLine;
+    document.getElementById('ball-line')!.textContent = truncateHoverText(event.ballLine, 160);
     document.getElementById('ball-reaction')!.classList.add('hidden');
     document.getElementById('emotional-result')!.classList.add('hidden');
     document.getElementById('player-response-echo')!.classList.add('hidden');
+    this.updateBallMeta(hoverType, mood);
 
     const choices = document.getElementById('response-choices')!;
     choices.innerHTML = '';
@@ -157,11 +213,12 @@ export class UIManager {
     choices.appendChild(customBtn);
 
     this.hideCustomInputArea();
+    requestAnimationFrame(() => this.repositionBubble());
   }
 
   showCustomInput(): void {
     this.customInputVisible = true;
-    document.getElementById('response-choices')!.innerHTML = '';
+    document.getElementById('response-choices')!.classList.add('hidden');
     const area = document.getElementById('text-input-area')!;
     area.classList.remove('hidden');
     const input = document.getElementById('text-response-input') as HTMLInputElement;
@@ -173,19 +230,20 @@ export class UIManager {
 
   hideCustomInputArea(): void {
     this.customInputVisible = false;
+    document.getElementById('response-choices')!.classList.remove('hidden');
     document.getElementById('text-input-area')!.classList.add('hidden');
   }
 
   showReaction(reaction: string, emotionalResult?: string, playerEcho?: string): void {
+    document.getElementById('response-panel')!.classList.add('hidden');
+
     if (playerEcho) {
       const echo = document.getElementById('player-response-echo')!;
-      echo.textContent = `You: "${playerEcho}"`;
+      echo.textContent = `You: "${truncateHoverText(playerEcho, 100)}"`;
       echo.classList.remove('hidden');
     }
-    document.getElementById('ball-reaction')!.textContent = reaction;
+    document.getElementById('ball-reaction')!.textContent = truncateHoverText(reaction, 140);
     document.getElementById('ball-reaction')!.classList.remove('hidden');
-    document.getElementById('response-choices')!.innerHTML = '';
-    this.hideCustomInputArea();
     document.getElementById('hover-banner')!.classList.add('hidden');
 
     const resultEl = document.getElementById('emotional-result')!;
@@ -193,11 +251,14 @@ export class UIManager {
       resultEl.textContent = emotionalResult;
       resultEl.classList.remove('hidden');
     }
+
+    requestAnimationFrame(() => this.repositionBubble());
   }
 
   hideDialogue(): void {
     this.dialogueOverlay.classList.add('hidden');
     document.getElementById('hover-banner')!.classList.add('hidden');
+    document.getElementById('response-panel')!.classList.add('hidden');
     this.hideCustomInputArea();
   }
 
@@ -255,12 +316,32 @@ export class UIManager {
     }
   }
 
-  updateBubblePosition(ballScreenX: number, ballScreenY: number): void {
-    const bubble = document.getElementById('speech-bubble');
-    if (bubble && !this.dialogueOverlay.classList.contains('hidden')) {
-      bubble.style.left = `${ballScreenX}px`;
-      bubble.style.top = `${ballScreenY - 90}px`;
+  updateBubblePosition(ballScreenX: number, ballScreenY: number, canvasBounds?: ScreenBounds): void {
+    this.lastBallScreen = { x: ballScreenX, y: ballScreenY };
+    if (canvasBounds) this.canvasBounds = canvasBounds;
+    if (!this.dialogueOverlay.classList.contains('hidden')) {
+      this.repositionBubble();
     }
+  }
+
+  private repositionBubble(): void {
+    if (!this.canvasBounds) return;
+    const bubble = document.getElementById('speech-bubble');
+    if (!bubble) return;
+    positionDialogueBubbleNearBall(
+      this.lastBallScreen.x,
+      this.lastBallScreen.y,
+      bubble,
+      this.canvasBounds
+    );
+  }
+
+  private positionHoverBanner(bounds: ScreenBounds): void {
+    const banner = document.getElementById('hover-banner');
+    if (!banner) return;
+    banner.style.left = `${(bounds.left + bounds.right) / 2}px`;
+    banner.style.top = `${bounds.top + 18}px`;
+    banner.style.transform = 'translate(-50%, 0)';
   }
 }
 

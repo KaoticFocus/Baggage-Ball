@@ -29,8 +29,21 @@
           <span id="hud-mode">VOICE</span>
         </div>
       </div>
+      <div class="hud-controls">
+        <button id="hud-pause-btn" type="button" class="hud-btn">Pause</button>
+        <button id="hud-quit-btn" type="button" class="hud-btn hud-btn-quit">Quit</button>
+      </div>
+      <div id="pause-banner" class="pause-banner hidden">PAUSED</div>
       <div id="stats-panel" class="stats-panel">
         <h3 id="stats-ball-name">Ball</h3>
+        <div class="hud-meta">
+          <span class="label">HOVER</span>
+          <span id="hud-hover-type">—</span>
+        </div>
+        <div class="hud-meta">
+          <span class="label">MOOD</span>
+          <span id="hud-mood">Volatile</span>
+        </div>
         <div class="stat-row"><span>Trust</span><div class="stat-bar"><div id="stat-trust" class="stat-fill trust"></div></div></div>
         <div class="stat-row"><span>Resentment</span><div class="stat-bar"><div id="stat-resentment" class="stat-fill resentment"></div></div></div>
         <div class="stat-row"><span>Ego</span><div class="stat-bar"><div id="stat-ego" class="stat-fill ego"></div></div></div>
@@ -50,11 +63,13 @@
         <p id="ball-reaction" class="ball-reaction hidden"></p>
         <p id="emotional-result" class="emotional-result hidden"></p>
       </div>
-      <div id="response-choices" class="response-choices"></div>
-      <div id="text-input-area" class="text-input-area hidden">
-        <input type="text" id="text-response-input" placeholder="Type your response..." />
-        <button id="text-response-submit">Send</button>
-      </div>
+      <aside id="response-panel" class="response-panel">
+        <div id="response-choices" class="response-choices"></div>
+        <div id="text-input-area" class="text-input-area hidden">
+          <input type="text" id="text-response-input" placeholder="Type your response..." />
+          <button id="text-response-submit">Send</button>
+        </div>
+      </aside>
     </div>
 
     <div id="outburst-label" class="outburst-label hidden"></div>
@@ -68,7 +83,7 @@
         <p class="subtitle">Pick your problem:</p>
         <div id="ball-select" class="ball-select"></div>
         <div class="controls-hint">
-          <p>Mouse / ← → paddle · T mode · H hover · V clingy · M mode dialogue · R +resent · C +chaos · 1–4 respond</p>
+          <p>Mouse / ← → paddle · T mode · H hover · M mode dialogue · R/C/D/A +stats · 1–4 respond</p>
         </div>
       </div>
     </div>

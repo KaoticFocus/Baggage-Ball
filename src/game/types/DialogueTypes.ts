@@ -50,6 +50,7 @@ export type InputMode = 'voice' | 'text';
 
 export type HoverDecision = {
   shouldHover: true;
+  hoverType: DialogueSituation;
   situation: DialogueSituation;
   reason: string;
 };

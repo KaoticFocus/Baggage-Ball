@@ -10,14 +10,16 @@ import {
   launchBall,
   reflectPaddle,
 } from '../systems/BehaviorModifierSystem';
+import { BallHoverMorph } from '../systems/BallHoverMorph';
 import { getEmotionalResult } from '../systems/EmotionalResultSystem';
 import { buildRecapData } from '../systems/RecapSystem';
 import { RecapScene } from './RecapScene';
 import { classifyPlayerResponse, LocalAiError } from '../services/LocalAiClient';
-import type { DialogueSituation } from '../types/DialogueTypes';
+import type { HoverDecision } from '../types/DialogueTypes';
 import type { DialogueResponse } from '../types/DialogueTypes';
 import type { BehaviorModifier } from '../types/BallTypes';
 import { uiManager } from '../../ui/UIManager';
+import type { ScreenBounds } from '../../ui/dialogueBubbleLayout';
 
 type GameState = 'playing' | 'hover' | 'ended';
 
@@ -36,21 +38,23 @@ export class PlayScene extends Phaser.Scene {
   private paddleBody!: Phaser.Physics.Arcade.Body;
   private hoverDim!: Phaser.GameObjects.Rectangle;
   private ballGlow!: Phaser.GameObjects.Arc;
+  private hoverMorph!: BallHoverMorph;
 
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private gameState: GameState = 'playing';
   private currentEvent: import('../types/DialogueTypes').DialogueEvent | null = null;
   private nearMissTriggered = false;
-  private longRallyTriggered = false;
+  private lastLongRallyMilestone = 0;
   private gentleNextHit = false;
   private betrayalActive = false;
   private wallBounceCooldown = 0;
-  private hoverPulseTween: Phaser.Tweens.Tween | null = null;
-  private hoverShakeTween: Phaser.Tweens.Tween | null = null;
-  private periodicCheckTimer = 0;
   private recentEvents: string[] = [];
   private playerModeHistory: string[] = ['voice'];
-  private dramaticPausePending = false;
+  private storedVelocity = { x: 0, y: 0 };
+  private currentHoverType = '';
+  private playfieldBottom = 0;
+  private failsafeCheckTimer = 0;
+  private isPaused = false;
 
   private readonly PADDLE_WIDTH = 120;
   private readonly PADDLE_HEIGHT = 16;
@@ -89,9 +93,33 @@ export class PlayScene extends Phaser.Scene {
     this.hoverDim = this.add.rectangle(width / 2, height / 2, width, height, 0x000008, 0);
     this.hoverDim.setDepth(5);
 
+    const borderInset = 20;
+    const borderTop = 20;
+    const borderWidth = width - 40;
+    const playfieldHeight = height - 80;
+    const borderBottom = borderTop + playfieldHeight;
+    this.playfieldBottom = borderBottom;
+
     const border = this.add.graphics();
     border.lineStyle(2, 0x2a2a4a, 0.8);
-    border.strokeRect(20, 20, width - 40, height - 80);
+    border.beginPath();
+    border.moveTo(borderInset, borderTop);
+    border.lineTo(borderInset + borderWidth, borderTop);
+    border.moveTo(borderInset, borderTop);
+    border.lineTo(borderInset, borderBottom);
+    border.moveTo(borderInset + borderWidth, borderTop);
+    border.lineTo(borderInset + borderWidth, borderBottom);
+    border.strokePath();
+
+    const dangerGlow = this.add.rectangle(
+      width / 2,
+      borderBottom + 28,
+      borderWidth - 8,
+      52,
+      0xff2233,
+      0.07
+    );
+    dangerGlow.setDepth(2);
 
     this.paddle = this.add.rectangle(
       width / 2,
@@ -126,12 +154,27 @@ export class PlayScene extends Phaser.Scene {
             this.wallBounceCooldown = 200;
             this.updateUI();
           }
+          const stats = this.personality.getStats();
+          const nearMissHover = this.emotionDirector.onWallBounce(stats, this.ballId);
+          if (nearMissHover) {
+            this.triggerHover(nearMissHover);
+          }
         }
       }
     );
     this.ballBody.setBounce(1, 1);
     this.ballBody.setMaxVelocity(550, 550);
-    this.physics.world.setBounds(20, 20, width - 40, height - 80);
+
+    this.hoverMorph = new BallHoverMorph(
+      this,
+      this.ball,
+      this.ballGlow,
+      this.ballId,
+      colors,
+      this.BALL_RADIUS
+    );
+
+    this.physics.world.setBounds(20, 20, width - 40, playfieldHeight + 160);
 
     launchBall(this.ballBody, this.personality.getSpeedMultiplier());
 
@@ -143,6 +186,10 @@ export class PlayScene extends Phaser.Scene {
       onResponseSelected: (index) => this.selectResponse(index),
       onCustomResponseSubmitted: (text) => this.submitCustomResponse(text),
     });
+    uiManager.setGameControlCallbacks({
+      onPauseToggle: () => this.togglePause(),
+      onQuit: () => this.quitToMenu(),
+    });
     this.updateUI();
 
     this.physics.add.collider(this.ball, this.paddle, this.onPaddleHit, undefined, this);
@@ -152,31 +199,61 @@ export class PlayScene extends Phaser.Scene {
     this.gameState = 'playing';
     this.currentEvent = null;
     this.nearMissTriggered = false;
-    this.longRallyTriggered = false;
+    this.lastLongRallyMilestone = 0;
     this.gentleNextHit = false;
     this.betrayalActive = false;
     this.wallBounceCooldown = 0;
-    this.periodicCheckTimer = 0;
+    this.failsafeCheckTimer = 0;
+    this.isPaused = false;
     this.recentEvents = [];
     this.playerModeHistory = ['voice'];
-    this.dramaticPausePending = false;
+    this.currentHoverType = '';
   }
 
   private setupKeyboard(): void {
     const kb = this.input.keyboard!;
     kb.on('keydown-T', () => this.toggleInputMode());
     kb.on('keydown-H', () => this.debugForceHover('random'));
-    kb.on('keydown-V', () => this.debugForceHover('clingy'));
     kb.on('keydown-M', () => this.debugForceHover('mode'));
     kb.on('keydown-R', () => {
       this.personality.updateStats({ resentment: 15 });
+      console.log('[Debug] +Resentment', this.personality.getStats());
       uiManager.updateStats(this.personality.getStats());
+      uiManager.updateBallMeta(
+        this.currentHoverType,
+        this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+      );
       uiManager.showDebugToast('+Resentment');
     });
     kb.on('keydown-C', () => {
       this.personality.updateStats({ chaos: 15 });
+      console.log('[Debug] +Chaos', this.personality.getStats());
       uiManager.updateStats(this.personality.getStats());
+      uiManager.updateBallMeta(
+        this.currentHoverType,
+        this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+      );
       uiManager.showDebugToast('+Chaos');
+    });
+    kb.on('keydown-D', () => {
+      this.personality.updateStats({ dramaNeed: 15 });
+      console.log('[Debug] +DramaNeed', this.personality.getStats());
+      uiManager.updateStats(this.personality.getStats());
+      uiManager.updateBallMeta(
+        this.currentHoverType,
+        this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+      );
+      uiManager.showDebugToast('+DramaNeed');
+    });
+    kb.on('keydown-A', () => {
+      this.personality.updateStats({ attachment: 15 });
+      console.log('[Debug] +Attachment', this.personality.getStats());
+      uiManager.updateStats(this.personality.getStats());
+      uiManager.updateBallMeta(
+        this.currentHoverType,
+        this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+      );
+      uiManager.showDebugToast('+Attachment');
     });
     kb.on('keydown-SPACE', () => {
       if (this.gameState === 'hover') this.selectResponse(0);
@@ -191,6 +268,13 @@ export class PlayScene extends Phaser.Scene {
   update(_time: number, delta: number): void {
     if (this.gameState === 'ended') return;
 
+    if (this.isPaused) {
+      if (this.gameState === 'playing') {
+        this.ballBody.setVelocity(0, 0);
+      }
+      return;
+    }
+
     this.ballGlow.setPosition(this.ball.x, this.ball.y);
 
     this.behaviorMod.tick();
@@ -198,6 +282,8 @@ export class PlayScene extends Phaser.Scene {
     if (this.gameState === 'hover') {
       this.ballBody.setVelocity(0, 0);
       this.ballGlow.setPosition(this.ball.x, this.ball.y);
+      this.hoverMorph.syncPosition(this.ball.x, this.ball.y);
+      uiManager.setCanvasBounds(this.getCanvasScreenBounds());
       this.updateBubblePosition();
       return;
     }
@@ -226,44 +312,27 @@ export class PlayScene extends Phaser.Scene {
       !this.nearMissTriggered &&
       this.ball.y > this.paddle.y - 60 &&
       this.ball.y < this.paddle.y &&
-      Math.abs(this.ball.x - this.paddle.x) > this.PADDLE_WIDTH * 0.6
+      Math.abs(this.ball.x - this.paddle.x) > this.PADDLE_WIDTH * 0.45
     ) {
       this.nearMissTriggered = true;
       this.scoring.addEvent('nearMiss');
+      this.emotionDirector.onNearMissDetected();
       this.updateUI();
-      const decision = this.emotionDirector.onNearMiss(stats);
-      this.triggerHover(decision.situation, false);
     }
 
-    if (this.ball.y > this.scale.height) {
+    if (this.ball.y > this.playfieldBottom + 30) {
       this.endRound();
       return;
     }
 
-    // Periodic emotion director checks (every ~500ms)
-    this.periodicCheckTimer += delta;
-    if (this.periodicCheckTimer >= 500) {
-      this.periodicCheckTimer = 0;
-      const ctx = this.emotionDirector.getContext(
-        this.scoring.paddleHits,
-        this.scoring.currentRallyHits
-      );
-      ctx.ballId = this.ballId;
-      ctx.stats = stats;
-      const decision = this.emotionDirector.evaluatePeriodic(ctx);
-      if (decision) {
-        this.triggerHover(decision.situation, false);
+    this.failsafeCheckTimer += delta;
+    if (this.failsafeCheckTimer >= 5000) {
+      this.failsafeCheckTimer = 0;
+      const failsafeDecision = this.emotionDirector.evaluateFailsafe(stats, this.ballId);
+      if (failsafeDecision) {
+        this.triggerHover(failsafeDecision);
+        return;
       }
-    }
-
-    if (
-      !this.longRallyTriggered &&
-      this.scoring.currentRallyHits >= 12 &&
-      this.gameState === 'playing'
-    ) {
-      this.longRallyTriggered = true;
-      const decision = this.emotionDirector.onLongRally(stats);
-      this.triggerHover(decision.situation, false);
     }
 
     if (this.behaviorMod.outburstLabel) {
@@ -295,10 +364,9 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private onPaddleHit(): void {
-    if (this.gameState !== 'playing') return;
+    if (this.gameState !== 'playing' || this.isPaused) return;
 
     this.nearMissTriggered = false;
-    const centerHit = Math.abs(this.ball.x - this.paddle.x) < this.PADDLE_WIDTH * 0.22;
     const gentle = this.gentleNextHit || this.behaviorMod.activeModifier === 'gentleReturn';
     this.gentleNextHit = false;
 
@@ -344,40 +412,58 @@ export class PlayScene extends Phaser.Scene {
     this.scoring.addEvent('paddleHit');
     this.updateUI();
 
-    const hoverDecision = this.emotionDirector.onPaddleHit(centerHit, stats, this.ballId);
+    if (this.emotionDirector.isLongRallyMilestone(this.scoring.currentRallyHits)) {
+      if (this.scoring.currentRallyHits > this.lastLongRallyMilestone) {
+        this.lastLongRallyMilestone = this.scoring.currentRallyHits;
+        const milestoneDecision = this.emotionDirector.onLongRallyMilestone(
+          stats,
+          this.ballId,
+          this.scoring.currentRallyHits
+        );
+        if (milestoneDecision) {
+          this.triggerHover(milestoneDecision);
+          return;
+        }
+      }
+    }
+
+    const hoverDecision = this.emotionDirector.onPaddleHit(stats, this.ballId);
     if (hoverDecision) {
-      this.triggerHover(hoverDecision.situation, false);
+      this.triggerHover(hoverDecision);
     }
   }
 
   private toggleInputMode(): void {
-    const { isFirstTextSwitch } = this.inputMode.toggle();
+    const { switchedToText, isFirstTextSwitch } = this.inputMode.toggle();
     const mode = this.inputMode.getMode();
     this.playerModeHistory.push(mode);
     this.updateUI();
 
-    if (isFirstTextSwitch && this.gameState === 'playing') {
-      const decision = this.emotionDirector.onModeSwitch();
-      this.triggerHover(decision.situation, true);
+    if (switchedToText && isFirstTextSwitch && this.gameState === 'playing') {
+      const stats = this.personality.getStats();
+      const decision = this.emotionDirector.forceModeSwitch(stats, this.ballId);
+      this.triggerHover(decision, true);
     }
   }
 
-  private debugForceHover(type: 'random' | 'clingy' | 'mode'): void {
+  private debugForceHover(type: 'random' | 'mode'): void {
     if (this.gameState !== 'playing') return;
     const stats = this.personality.getStats();
-    let decision;
-    if (type === 'clingy') {
-      decision = this.emotionDirector.forceClingy();
-    } else if (type === 'mode') {
-      decision = this.emotionDirector.forceModeSwitch();
-    } else {
-      decision = this.emotionDirector.forceRandom(stats, this.ballId);
+    if (type === 'mode') {
+      const decision = this.emotionDirector.forceModeSwitch(stats, this.ballId);
+      this.triggerHover(decision, true);
+      return;
     }
-    this.triggerHover(decision.situation, type === 'mode');
+    const decision = this.emotionDirector.forceRandom(stats, this.ballId);
+    this.triggerHover(decision);
   }
 
-  private triggerHover(situation: DialogueSituation, forceModeSwitch: boolean): void {
+  private triggerHover(decision: HoverDecision, forceModeSwitch = false): void {
     if (this.gameState === 'hover') return;
+
+    const situation = decision.situation;
+    this.currentHoverType = this.emotionDirector.formatHoverType(decision.hoverType);
+    console.log(`[Hover] ${decision.reason} → ${this.currentHoverType}`);
 
     let event = forceModeSwitch
       ? this.dialogue.getModeSwitchEvent(this.ballId)
@@ -397,44 +483,37 @@ export class PlayScene extends Phaser.Scene {
   private enterHover(event: NonNullable<typeof this.currentEvent>): void {
     this.gameState = 'hover';
     this.currentEvent = event;
+    this.emotionDirector.notifyHoverStarted();
+
+    this.storedVelocity.x = this.ballBody.velocity.x;
+    this.storedVelocity.y = this.ballBody.velocity.y;
     this.ballBody.setVelocity(0, 0);
 
     this.time.timeScale = 0.35;
     this.tweens.add({
       targets: this.hoverDim,
-      alpha: 0.45,
+      alpha: 0.55,
       duration: 200,
     });
 
-    this.hoverPulseTween = this.tweens.add({
-      targets: [this.ball, this.ballGlow],
-      scaleX: 1.2,
-      scaleY: 1.2,
-      yoyo: true,
-      repeat: -1,
-      duration: 450,
-      ease: 'Sine.easeInOut',
-    });
-
-    this.hoverShakeTween = this.tweens.add({
-      targets: this.ball,
-      x: this.ball.x + 3,
-      yoyo: true,
-      repeat: -1,
-      duration: 80,
-      ease: 'Linear',
-    });
+    this.hoverMorph.enter(this.personality.getStats());
 
     this.dialogue.speakBallLine(event.ballLine, this.inputMode.getMode());
     this.recentEvents.push(`${event.situation}: ${event.ballLine.slice(0, 60)}`);
     if (this.recentEvents.length > 8) this.recentEvents.shift();
 
+    const bounds = this.getCanvasScreenBounds();
+    const screen = this.ballToScreen(this.ball.x, this.ball.y);
+
     uiManager.showDialogue(
       event,
       this.inputMode.getMode(),
-      this.ball.x,
-      this.ball.y,
-      true
+      screen.x,
+      screen.y,
+      true,
+      this.currentHoverType,
+      this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId),
+      bounds
     );
   }
 
@@ -512,9 +591,6 @@ export class PlayScene extends Phaser.Scene {
     if (response.behaviorModifier === 'gentleReturn') {
       this.gentleNextHit = true;
     }
-    if (response.behaviorModifier === 'dramaticPause') {
-      this.dramaticPausePending = true;
-    }
 
     const ballName = this.personality.getPersonality().name;
     const emotionalResult =
@@ -524,8 +600,12 @@ export class PlayScene extends Phaser.Scene {
     this.recentEvents.push(`player: ${(playerEcho ?? response.text).slice(0, 50)}`);
     uiManager.showReaction(response.ballReaction, emotionalResult, playerEcho);
     uiManager.updateStats(this.personality.getStats());
+    uiManager.updateBallMeta(
+      this.currentHoverType,
+      this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+    );
 
-    this.time.delayedCall(2200, () => {
+    this.time.delayedCall(1500, () => {
       this.resumeFromHover();
     });
   }
@@ -533,39 +613,55 @@ export class PlayScene extends Phaser.Scene {
   private resumeFromHover(): void {
     this.gameState = 'playing';
     this.currentEvent = null;
+    this.currentHoverType = '';
     this.emotionDirector.markHoverResolved();
 
     this.time.timeScale = 1;
     this.tweens.add({ targets: this.hoverDim, alpha: 0, duration: 250 });
-    this.hoverPulseTween?.stop();
-    this.hoverShakeTween?.stop();
-    this.ball.setScale(1);
-    this.ballGlow.setScale(1);
 
     uiManager.hideDialogue();
-
-    if (this.dramaticPausePending) {
-      this.dramaticPausePending = false;
-      this.time.delayedCall(4000, () => {
-        if (this.gameState === 'playing') {
-          const stats = this.personality.getStats();
-          const decision = this.emotionDirector.forceRandom(stats, this.ballId);
-          this.triggerHover(decision.situation, false);
-        }
-      });
-    }
+    uiManager.updateBallMeta('', this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId));
 
     const stats = this.personality.getStats();
     const speedMult = this.personality.getSpeedMultiplier();
-    if (stats.attachment > 80) {
-      launchBall(this.ballBody, speedMult, this.paddle.x);
-    } else {
-      launchBall(this.ballBody, speedMult);
-    }
+    const speed = Math.abs(this.storedVelocity.x) + Math.abs(this.storedVelocity.y);
+
+    const resumeBallMotion = (): void => {
+      if (speed > 30) {
+        this.ballBody.setVelocity(this.storedVelocity.x, this.storedVelocity.y);
+      } else if (stats.attachment > 80) {
+        launchBall(this.ballBody, speedMult, this.paddle.x);
+      } else {
+        launchBall(this.ballBody, speedMult);
+      }
+    };
+
+    this.hoverMorph.exit(resumeBallMotion);
   }
 
   private updateBubblePosition(): void {
-    uiManager.updateBubblePosition(this.ball.x, this.ball.y);
+    const screen = this.ballToScreen(this.ball.x, this.ball.y);
+    uiManager.updateBubblePosition(screen.x, screen.y, this.getCanvasScreenBounds());
+  }
+
+  private getCanvasScreenBounds(): ScreenBounds {
+    const canvas = this.game.canvas;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+    };
+  }
+
+  private ballToScreen(x: number, y: number): { x: number; y: number } {
+    const canvas = this.game.canvas;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: rect.left + (x / this.scale.width) * rect.width,
+      y: rect.top + (y / this.scale.height) * rect.height,
+    };
   }
 
   private updateUI(): void {
@@ -576,10 +672,22 @@ export class PlayScene extends Phaser.Scene {
       this.inputMode.getMode()
     );
     uiManager.updateStats(this.personality.getStats());
+    uiManager.updateBallMeta(
+      this.currentHoverType,
+      this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+    );
   }
 
   private endRound(): void {
+    if (this.gameState === 'ended') return;
+
+    if (this.isPaused) {
+      this.resumeGame();
+    }
+
     this.gameState = 'ended';
+    this.ballBody.setVelocity(0, 0);
+    this.ballBody.setCollideWorldBounds(false);
     this.scoring.resetCombo();
     this.time.timeScale = 1;
 
@@ -605,5 +713,64 @@ export class PlayScene extends Phaser.Scene {
     }).then((recap) => {
       this.scene.start('RecapScene', recap);
     });
+  }
+
+  private togglePause(): void {
+    if (this.gameState === 'ended') return;
+    if (this.isPaused) {
+      this.resumeGame();
+    } else {
+      this.pauseGame();
+    }
+  }
+
+  private pauseGame(): void {
+    if (this.isPaused || this.gameState === 'ended') return;
+
+    this.isPaused = true;
+
+    if (this.gameState === 'playing') {
+      this.storedVelocity.x = this.ballBody.velocity.x;
+      this.storedVelocity.y = this.ballBody.velocity.y;
+    }
+
+    this.ballBody.setVelocity(0, 0);
+    this.physics.pause();
+    this.time.paused = true;
+    this.emotionDirector.pauseTimers();
+    uiManager.setPaused(true);
+  }
+
+  private resumeGame(): void {
+    if (!this.isPaused) return;
+
+    this.isPaused = false;
+    this.physics.resume();
+    this.time.paused = false;
+    this.emotionDirector.resumeTimers();
+    uiManager.setPaused(false);
+
+    if (this.gameState === 'playing') {
+      const speed = Math.abs(this.storedVelocity.x) + Math.abs(this.storedVelocity.y);
+      if (speed > 10) {
+        this.ballBody.setVelocity(this.storedVelocity.x, this.storedVelocity.y);
+      }
+    }
+  }
+
+  private quitToMenu(): void {
+    if (this.isPaused) {
+      this.time.paused = false;
+      this.physics.resume();
+      this.emotionDirector.resumeTimers();
+      this.isPaused = false;
+    }
+
+    this.time.timeScale = 1;
+    this.hoverMorph.forceRestore();
+    uiManager.hideDialogue();
+    uiManager.hideOutburst();
+    uiManager.resetGameControls();
+    this.scene.start('MenuScene');
   }
 }

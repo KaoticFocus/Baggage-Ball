@@ -14,16 +14,18 @@ export class InputModeSystem {
     return this.mode;
   }
 
-  toggle(): { mode: InputMode; isFirstTextSwitch: boolean } {
+  toggle(): { mode: InputMode; isFirstTextSwitch: boolean; switchedToText: boolean } {
+    const previous = this.mode;
     this.mode = this.mode === 'voice' ? 'text' : 'voice';
+    const switchedToText = previous === 'voice' && this.mode === 'text';
 
     let isFirstTextSwitch = false;
-    if (this.mode === 'text' && !this.hasSwitchedToTextThisRound) {
+    if (switchedToText && !this.hasSwitchedToTextThisRound) {
       this.hasSwitchedToTextThisRound = true;
       isFirstTextSwitch = true;
     }
 
-    return { mode: this.mode, isFirstTextSwitch };
+    return { mode: this.mode, isFirstTextSwitch, switchedToText };
   }
 
   hasSwitchedToText(): boolean {
