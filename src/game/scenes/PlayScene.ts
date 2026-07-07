@@ -23,7 +23,7 @@ import { getEmotionalResult } from '../systems/EmotionalResultSystem';
 import { MatchSystem } from '../systems/MatchSystem';
 import { buildMatchRecap, getOpponentShortName } from '../systems/MatchRecapSystem';
 import { getBallOpeningLine, getBallPointReaction } from '../data/ballOpeningLines';
-import { classifyPlayerResponse, LocalAiError } from '../services/LocalAiClient';
+import { classifyPlayerResponse } from '../services/classifyResponseClient';
 import type { HoverDecision } from '../types/DialogueTypes';
 import type { DialogueResponse } from '../types/DialogueTypes';
 import type { BehaviorModifier } from '../types/BallTypes';
@@ -946,45 +946,25 @@ export class PlayScene extends Phaser.Scene {
   private async submitCustomResponse(text: string): Promise<void> {
     if (this.gameState !== 'hover' || !this.currentEvent) return;
 
-    const personality = this.personality.getPersonality();
-    const stats = this.personality.getStats();
+    uiManager.showCustomInputProcessing();
 
-    try {
-      const ai = await classifyPlayerResponse({
-        ballName: personality.name,
-        ballPersonality: `${personality.title}. ${personality.dialogueStyle}`,
-        ballStats: stats,
-        ballLine: this.currentEvent.ballLine,
-        playerResponse: text,
-        situation: this.currentEvent.situation,
-      });
+    const result = await classifyPlayerResponse({
+      playerText: text,
+      ballId: this.ballId,
+      situation: this.currentEvent.situation,
+    });
 
-      this.applyAiResult(
-        {
-          text,
-          tone: ai.tone as DialogueResponse['tone'],
-          statChanges: ai.statChanges,
-          ballReaction: ai.ballReaction,
-          emotionalResult: ai.emotionalResult,
-          behaviorModifier: this.normalizeModifier(ai.behaviorModifier),
-        },
-        text
-      );
-    } catch (err) {
-      uiManager.showDebugToast('AI offline — using fallback');
-      this.applyAiResult(
-        {
-          text,
-          tone: 'boundary',
-          statChanges: { patience: -3, resentment: 2, trust: -2 },
-          ballReaction:
-            'The ball squints at your response, but the local AI server is apparently having a small breakdown.',
-          emotionalResult: 'The ball will remember that. Probably.',
-        },
-        text
-      );
-      console.warn('[Custom response fallback]', err instanceof LocalAiError ? err.message : err);
-    }
+    this.applyAiResult(
+      {
+        text,
+        tone: result.tone as DialogueResponse['tone'],
+        statChanges: result.statChanges,
+        ballReaction: result.ballReaction,
+        emotionalResult: result.emotionalResult,
+        behaviorModifier: this.normalizeModifier(result.behaviorModifier),
+      },
+      text
+    );
   }
 
   private normalizeModifier(mod?: string): BehaviorModifier | undefined {

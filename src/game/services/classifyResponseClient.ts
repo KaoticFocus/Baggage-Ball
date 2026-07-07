@@ -1,0 +1,76 @@
+/**
+ * Client helper for the Netlify classify-response function.
+ * Never throws — returns a safe fallback on any network or parse failure.
+ * API key lives server-side only.
+ */
+
+export type NetlifyClassifyResult = {
+  ok: boolean;
+  source: 'openai' | 'fallback' | 'stub';
+  tone: string;
+  emotionalResult: string;
+  ballReaction: string;
+  statChanges: {
+    trust: number;
+    resentment: number;
+    ego: number;
+    chaos: number;
+    attachment: number;
+    dramaNeed: number;
+    patience: number;
+  };
+  behaviorModifier: string;
+};
+
+const CLASSIFY_URL = '/.netlify/functions/classify-response';
+const TIMEOUT_MS = 6000;
+
+const FALLBACK_RESULT: NetlifyClassifyResult = {
+  ok: true,
+  source: 'fallback',
+  tone: 'uncertain',
+  emotionalResult: 'The ball absorbed your words and made them its whole personality.',
+  ballReaction: 'I heard you. I simply chose to process this privately.',
+  statChanges: {
+    trust: 1,
+    resentment: 1,
+    ego: 0,
+    chaos: 1,
+    attachment: 0,
+    dramaNeed: 1,
+    patience: -1,
+  },
+  behaviorModifier: 'none',
+};
+
+export async function classifyPlayerResponse(payload: {
+  playerText: string;
+  ballId: string;
+  situation: string;
+}): Promise<NetlifyClassifyResult> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    const res = await fetch(CLASSIFY_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      console.warn(`[AI Classifier] HTTP ${res.status}, using fallback`);
+      return FALLBACK_RESULT;
+    }
+
+    const data = (await res.json()) as NetlifyClassifyResult;
+    return data;
+  } catch {
+    clearTimeout(timeoutId);
+    console.warn('[AI Classifier] unavailable, using fallback');
+    return FALLBACK_RESULT;
+  }
+}
