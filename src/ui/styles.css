@@ -188,15 +188,18 @@ body {
 .opponent-bark-bubble {
   position: fixed;
   z-index: 8;
-  max-width: 200px;
-  background: rgba(12, 12, 22, 0.88);
-  border: 1px solid #556677;
-  border-radius: 8px;
-  padding: 0.45rem 0.6rem;
+  max-width: 280px;
+  min-width: 140px;
+  background: rgba(14, 14, 28, 0.93);
+  border: 1px solid #8899aa;
+  border-radius: 10px;
+  padding: 0.65rem 0.85rem;
   pointer-events: none;
   opacity: 1;
   transition: opacity 0.35s ease;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 6px 22px rgba(0, 0, 0, 0.42),
+    0 0 0 1px rgba(136, 153, 170, 0.12);
 }
 
 .opponent-bark-bubble.hidden {
@@ -204,8 +207,8 @@ body {
 }
 
 .opponent-bark-bubble.opponent-bark-subtle {
-  opacity: 0.45;
-  max-width: 160px;
+  opacity: 0.55;
+  max-width: 240px;
 }
 
 .opponent-bark-bubble.opponent-bark-fading {
@@ -214,18 +217,21 @@ body {
 
 .opponent-bark-name {
   display: block;
-  font-size: 0.55rem;
-  letter-spacing: 0.1em;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #8899bb;
-  margin-bottom: 0.2rem;
+  color: #a8b4cc;
+  margin-bottom: 0.35rem;
+  font-weight: 700;
 }
 
 #opponent-bark-text {
-  font-size: 0.68rem;
-  line-height: 1.35;
-  color: #c8d0e0;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: #d8e0f0;
   margin: 0;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .ball-card {

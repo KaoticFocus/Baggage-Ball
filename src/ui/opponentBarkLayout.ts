@@ -17,10 +17,12 @@ export type OpponentBarkLayoutInput = {
 
 type Rect = { left: number; top: number; right: number; bottom: number };
 
-const HORIZONTAL_PAD = 52;
-const PADDLE_HALF_SCREEN = 8;
-const BALL_AVOID_RADIUS = 44;
+const HORIZONTAL_PAD = 60;
+const PADDLE_HALF_SCREEN = 10;
+const BALL_AVOID_RADIUS = 48;
 const EDGE_PAD = 12;
+const BARK_FALLBACK_WIDTH = 280;
+const BARK_FALLBACK_HEIGHT = 80;
 
 function rectsOverlap(a: Rect, b: Rect, margin = 0): boolean {
   return !(
@@ -57,7 +59,7 @@ function getDialogueObstacleRects(): Rect[] {
   if (!overlay || overlay.classList.contains('hidden')) return [];
 
   const rects: Rect[] = [];
-  for (const sel of ['#speech-bubble', '#response-panel', '#hover-banner']) {
+  for (const sel of ['#dialogue-cluster', '#hover-banner']) {
     const el = document.querySelector<HTMLElement>(sel);
     if (!el || el.classList.contains('hidden')) continue;
     const r = el.getBoundingClientRect();
@@ -168,17 +170,17 @@ export function positionOpponentBarkBubble(input: OpponentBarkLayoutInput): bool
   bubble.style.transform = 'translate(-50%, -100%)';
 
   const measured = bubble.getBoundingClientRect();
-  const bubbleWidth = measured.width || 200;
-  const bubbleHeight = measured.height || 56;
+  const bubbleWidth = measured.width || BARK_FALLBACK_WIDTH;
+  const bubbleHeight = measured.height || BARK_FALLBACK_HEIGHT;
 
   const obstacles = [...getHudObstacleRects(), ...getDialogueObstacleRects()];
 
   const yCandidates = [
-    input.opponentPaddleScreen.y - 18,
-    input.opponentPaddleScreen.y + 28,
+    input.opponentPaddleScreen.y - 24,
+    input.opponentPaddleScreen.y + 36,
     input.fallbackCenterScreen.y,
-    input.playfieldScreen.top + 96,
-    input.playfieldScreen.bottom - 48,
+    input.playfieldScreen.top + 104,
+    input.playfieldScreen.bottom - 56,
   ].map((y) => clampY(y, bubbleHeight, input.playfieldScreen));
 
   const xCandidates = [
@@ -254,11 +256,11 @@ export function buildOpponentBarkLayoutInput(
   const fallbackCenterScreen = {
     x:
       opponentSide === 'left'
-        ? playfieldScreen.left + 160 * scaleX
-        : playfieldScreen.right - 360 * scaleX,
+        ? playfieldScreen.left + 180 * scaleX
+        : playfieldScreen.right - 400 * scaleX,
     y: Math.min(
-      playfieldScreen.bottom - 120 * scaleY,
-      Math.max(playfieldScreen.top + 80 * scaleY, opponentPaddleScreen.y)
+      playfieldScreen.bottom - 140 * scaleY,
+      Math.max(playfieldScreen.top + 96 * scaleY, opponentPaddleScreen.y)
     ),
   };
 
