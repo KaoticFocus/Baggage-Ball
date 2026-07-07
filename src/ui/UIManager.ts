@@ -546,7 +546,21 @@ export class UIManager {
   hideCustomInputArea(): void {
     this.customInputVisible = false;
     document.getElementById('response-choices')!.classList.remove('hidden');
-    document.getElementById('text-input-area')!.classList.add('hidden');
+    const area = document.getElementById('text-input-area')!;
+    area.classList.add('hidden');
+    const input = document.getElementById('text-response-input') as HTMLInputElement;
+    const submitBtn = document.getElementById('text-response-submit') as HTMLButtonElement;
+    input.disabled = false;
+    submitBtn.disabled = false;
+  }
+
+  showCustomInputProcessing(): void {
+    this.customInputVisible = false;
+    document.getElementById('ball-line')!.textContent = 'Ball is processing...';
+    const input = document.getElementById('text-response-input') as HTMLInputElement;
+    const submitBtn = document.getElementById('text-response-submit') as HTMLButtonElement;
+    input.disabled = true;
+    submitBtn.disabled = true;
   }
 
   showReaction(reaction: string, emotionalResult?: string, playerEcho?: string): void {
