@@ -11,6 +11,7 @@ import { opponentMonologues } from '../game/data/opponentMonologues';
 import type { BarkResult } from '../game/systems/OpponentBarkSystem';
 import {
   buildOpponentBarkLayoutInput,
+  getOpponentBarkLayoutKey,
   positionOpponentBarkBubble as layoutOpponentBarkBubble,
   type OpponentBarkLayoutInput,
 } from './opponentBarkLayout';
@@ -76,6 +77,7 @@ export class UIManager {
   private ballCommentTimer: ReturnType<typeof setTimeout> | null = null;
   private opponentBarkTimer: ReturnType<typeof setTimeout> | null = null;
   private opponentBarkFadeTimer: ReturnType<typeof setTimeout> | null = null;
+  private opponentBarkLayoutKey = '';
   private gameSize: { width: number; height: number } = {
     width: GAME_LAYOUT.CANVAS_WIDTH,
     height: GAME_LAYOUT.CANVAS_HEIGHT,
@@ -256,6 +258,10 @@ export class UIManager {
     this.showDebugToast('Panel reset');
   }
 
+  isDraggingDialoguePanel(): boolean {
+    return this.draggingPanel;
+  }
+
   private setupDialogueDrag(): void {
     const resetBtn = document.getElementById('dialogue-panel-reset')!;
     resetBtn.addEventListener('click', (e) => {
@@ -386,6 +392,8 @@ export class UIManager {
   }
 
   showMenu(): void {
+    this.renderBallSelect();
+    this.renderOpponentSelect();
     this.menuOverlay.classList.remove('hidden');
     this.hud.classList.add('hidden');
     this.dialogueOverlay.classList.add('hidden');
@@ -604,7 +612,7 @@ export class UIManager {
     this.opponentBarkBubble.classList.remove('opponent-bark-fading');
     this.opponentBarkBubble.style.opacity = '';
 
-    const visible = layoutOpponentBarkBubble(layoutInput);
+    const visible = this.positionOpponentBark(layoutInput, true);
     if (!visible) {
       this.hideOpponentBark();
       return;
@@ -625,10 +633,20 @@ export class UIManager {
 
   updateOpponentBarkPosition(layoutInput: OpponentBarkLayoutInput): void {
     if (this.opponentBarkBubble.classList.contains('hidden')) return;
-    const visible = layoutOpponentBarkBubble(layoutInput);
+    const visible = this.positionOpponentBark(layoutInput, false);
     if (!visible) {
       this.hideOpponentBark();
     }
+  }
+
+  private positionOpponentBark(layoutInput: OpponentBarkLayoutInput, force: boolean): boolean {
+    const layoutKey = getOpponentBarkLayoutKey(layoutInput);
+    if (!force && layoutKey === this.opponentBarkLayoutKey) {
+      return true;
+    }
+
+    this.opponentBarkLayoutKey = layoutKey;
+    return layoutOpponentBarkBubble(layoutInput);
   }
 
   buildOpponentBarkLayout(
@@ -636,8 +654,7 @@ export class UIManager {
     opponentSide: PaddleSide,
     canvasBounds: ScreenBounds,
     playfield: { left: number; right: number; top: number; bottom: number },
-    gameSize: { width: number; height: number },
-    ballScreen?: { x: number; y: number }
+    gameSize: { width: number; height: number }
   ): OpponentBarkLayoutInput {
     return buildOpponentBarkLayoutInput(
       this.opponentBarkBubble,
@@ -646,8 +663,7 @@ export class UIManager {
       canvasBounds,
       playfield,
       gameSize,
-      !this.dialogueOverlay.classList.contains('hidden'),
-      ballScreen
+      !this.dialogueOverlay.classList.contains('hidden')
     );
   }
 
@@ -655,6 +671,7 @@ export class UIManager {
     this.opponentBarkBubble.classList.add('hidden');
     this.opponentBarkBubble.classList.remove('opponent-bark-fading');
     this.opponentBarkBubble.style.opacity = '';
+    this.opponentBarkLayoutKey = '';
     if (this.opponentBarkTimer) {
       clearTimeout(this.opponentBarkTimer);
       this.opponentBarkTimer = null;

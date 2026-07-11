@@ -2,6 +2,9 @@ import { GAME_LAYOUT } from '../game/layout/GameLayout';
 import type { PaddleSide } from '../game/settings/PlayerSettings';
 import type { ScreenBounds } from './dialogueBubbleLayout';
 
+export const OPPONENT_THOUGHT_WIDTH_PX = 260;
+export const OPPONENT_THOUGHT_MIN_HEIGHT_PX = 76;
+
 export type OpponentBarkLayoutInput = {
   bubble: HTMLElement;
   opponentSide: PaddleSide;
@@ -10,19 +13,20 @@ export type OpponentBarkLayoutInput = {
   playfieldScreen: ScreenBounds;
   leftPaddleSafeScreen: { left: number; right: number };
   rightPaddleSafeScreen: { left: number; right: number };
-  fallbackCenterScreen: { x: number; y: number };
   ballDialogueVisible: boolean;
-  ballScreen?: { x: number; y: number };
+};
+
+export type OpponentThoughtAnchor = {
+  left: number;
+  top: number;
+  side: PaddleSide;
 };
 
 type Rect = { left: number; top: number; right: number; bottom: number };
 
-const HORIZONTAL_PAD = 60;
-const PADDLE_HALF_SCREEN = 10;
-const BALL_AVOID_RADIUS = 48;
 const EDGE_PAD = 12;
-const BARK_FALLBACK_WIDTH = 280;
-const BARK_FALLBACK_HEIGHT = 80;
+const LANE_GAP = 16;
+const THOUGHT_HEIGHT_ESTIMATE = 110;
 
 function rectsOverlap(a: Rect, b: Rect, margin = 0): boolean {
   return !(
@@ -31,15 +35,6 @@ function rectsOverlap(a: Rect, b: Rect, margin = 0): boolean {
     a.bottom + margin < b.top ||
     a.top - margin > b.bottom
   );
-}
-
-function bubbleRect(centerX: number, anchorY: number, width: number, height: number): Rect {
-  return {
-    left: centerX - width / 2,
-    right: centerX + width / 2,
-    top: anchorY - height,
-    bottom: anchorY,
-  };
 }
 
 function getHudObstacleRects(): Rect[] {
@@ -68,21 +63,16 @@ function getDialogueObstacleRects(): Rect[] {
   return rects;
 }
 
-function getBallObstacle(ballScreen?: { x: number; y: number }): Rect | null {
-  if (!ballScreen) return null;
+function thoughtBubbleRect(left: number, top: number): Rect {
   return {
-    left: ballScreen.x - BALL_AVOID_RADIUS,
-    right: ballScreen.x + BALL_AVOID_RADIUS,
-    top: ballScreen.y - BALL_AVOID_RADIUS,
-    bottom: ballScreen.y + BALL_AVOID_RADIUS,
+    left,
+    top,
+    right: left + OPPONENT_THOUGHT_WIDTH_PX,
+    bottom: top + THOUGHT_HEIGHT_ESTIMATE,
   };
 }
 
-function overlapsBlockedAreas(
-  rect: Rect,
-  input: OpponentBarkLayoutInput,
-  obstacles: Rect[]
-): boolean {
+function overlapsBlockedAreas(rect: Rect, input: OpponentBarkLayoutInput, obstacles: Rect[]): boolean {
   const leftLane: Rect = {
     left: input.leftPaddleSafeScreen.left,
     right: input.leftPaddleSafeScreen.right,
@@ -96,18 +86,15 @@ function overlapsBlockedAreas(
     bottom: input.playfieldScreen.bottom,
   };
 
-  if (rectsOverlap(rect, leftLane, 4) || rectsOverlap(rect, rightLane, 4)) return true;
+  if (rectsOverlap(rect, leftLane, 6) || rectsOverlap(rect, rightLane, 6)) return true;
 
   for (const obstacle of obstacles) {
-    if (rectsOverlap(rect, obstacle, 8)) return true;
+    if (rectsOverlap(rect, obstacle, 10)) return true;
   }
 
-  const ballObstacle = getBallObstacle(input.ballScreen);
-  if (ballObstacle && rectsOverlap(rect, ballObstacle, 4)) return true;
-
   if (
-    rect.left < input.canvasBounds.left + EDGE_PAD ||
-    rect.right > input.canvasBounds.right - EDGE_PAD ||
+    rect.left < input.playfieldScreen.left + EDGE_PAD ||
+    rect.right > input.playfieldScreen.right - EDGE_PAD ||
     rect.top < input.playfieldScreen.top + EDGE_PAD ||
     rect.bottom > input.playfieldScreen.bottom - EDGE_PAD
   ) {
@@ -117,103 +104,80 @@ function overlapsBlockedAreas(
   return false;
 }
 
-function primaryCenterX(opponentSide: PaddleSide, paddleX: number, bubbleWidth: number): number {
-  if (opponentSide === 'left') {
-    const bubbleLeft = paddleX + PADDLE_HALF_SCREEN + HORIZONTAL_PAD;
-    return bubbleLeft + bubbleWidth / 2;
+function baseAnchorTop(input: OpponentBarkLayoutInput): number {
+  const playfieldHeight = input.playfieldScreen.bottom - input.playfieldScreen.top;
+  return input.playfieldScreen.top + playfieldHeight * 0.36;
+}
+
+function baseAnchorLeft(input: OpponentBarkLayoutInput): number {
+  if (input.opponentSide === 'left') {
+    return input.leftPaddleSafeScreen.right + LANE_GAP;
   }
-  const bubbleRight = paddleX - PADDLE_HALF_SCREEN - HORIZONTAL_PAD;
-  return bubbleRight - bubbleWidth / 2;
-}
-
-function clampY(
-  anchorY: number,
-  bubbleHeight: number,
-  playfield: ScreenBounds
-): number {
-  const minAnchor = playfield.top + EDGE_PAD + bubbleHeight;
-  const maxAnchor = playfield.bottom - EDGE_PAD;
-  return Math.min(maxAnchor, Math.max(minAnchor, anchorY));
-}
-
-function scorePosition(
-  centerX: number,
-  anchorY: number,
-  width: number,
-  height: number,
-  input: OpponentBarkLayoutInput,
-  obstacles: Rect[]
-): number {
-  const rect = bubbleRect(centerX, anchorY, width, height);
-  if (overlapsBlockedAreas(rect, input, obstacles)) return Number.POSITIVE_INFINITY;
-
-  let score = Math.abs(centerX - input.opponentPaddleScreen.x);
-  score += Math.abs(anchorY - input.opponentPaddleScreen.y) * 0.35;
-  return score;
+  return input.rightPaddleSafeScreen.left - OPPONENT_THOUGHT_WIDTH_PX - LANE_GAP;
 }
 
 /**
- * Position opponent bark away from paddle lanes and HUD.
- * Returns false when the bark should be hidden (e.g. during ball dialogue).
+ * Fixed thought-bubble anchor on the opponent side of the court.
+ * Does not follow paddle Y — stable while a bark is visible.
  */
-export function positionOpponentBarkBubble(input: OpponentBarkLayoutInput): boolean {
-  const { bubble, ballDialogueVisible } = input;
-
-  if (ballDialogueVisible) {
-    return false;
-  }
-
-  const wasHidden = bubble.classList.contains('hidden');
-  bubble.classList.remove('hidden');
-  bubble.classList.remove('opponent-bark-subtle');
-  bubble.style.visibility = 'hidden';
-  bubble.style.transform = 'translate(-50%, -100%)';
-
-  const measured = bubble.getBoundingClientRect();
-  const bubbleWidth = measured.width || BARK_FALLBACK_WIDTH;
-  const bubbleHeight = measured.height || BARK_FALLBACK_HEIGHT;
+export function computeOpponentThoughtAnchor(
+  input: OpponentBarkLayoutInput
+): OpponentThoughtAnchor | null {
+  if (input.ballDialogueVisible) return null;
 
   const obstacles = [...getHudObstacleRects(), ...getDialogueObstacleRects()];
+  const left = baseAnchorLeft(input);
+  const yOffsets = [0, -48, 48, -96, 96];
 
-  const yCandidates = [
-    input.opponentPaddleScreen.y - 24,
-    input.opponentPaddleScreen.y + 36,
-    input.fallbackCenterScreen.y,
-    input.playfieldScreen.top + 104,
-    input.playfieldScreen.bottom - 56,
-  ].map((y) => clampY(y, bubbleHeight, input.playfieldScreen));
-
-  const xCandidates = [
-    primaryCenterX(input.opponentSide, input.opponentPaddleScreen.x, bubbleWidth),
-    input.fallbackCenterScreen.x,
-    input.opponentSide === 'left'
-      ? input.leftPaddleSafeScreen.right + HORIZONTAL_PAD + bubbleWidth / 2
-      : input.rightPaddleSafeScreen.left - HORIZONTAL_PAD - bubbleWidth / 2,
-    (input.playfieldScreen.left + input.playfieldScreen.right) / 2,
-  ];
-
-  let bestX = xCandidates[0];
-  let bestY = yCandidates[0];
-  let bestScore = Number.POSITIVE_INFINITY;
-
-  for (const centerX of xCandidates) {
-    for (const anchorY of yCandidates) {
-      const score = scorePosition(centerX, anchorY, bubbleWidth, bubbleHeight, input, obstacles);
-      if (score < bestScore) {
-        bestScore = score;
-        bestX = centerX;
-        bestY = anchorY;
-      }
+  for (const yOffset of yOffsets) {
+    const top = baseAnchorTop(input) + yOffset;
+    const rect = thoughtBubbleRect(left, top);
+    if (!overlapsBlockedAreas(rect, input, obstacles)) {
+      return { left, top, side: input.opponentSide };
     }
   }
 
-  if (!Number.isFinite(bestScore)) {
-    if (wasHidden) bubble.classList.add('hidden');
+  return null;
+}
+
+export function getOpponentBarkLayoutKey(input: OpponentBarkLayoutInput): string {
+  const b = input.canvasBounds;
+  const p = input.playfieldScreen;
+  return [
+    input.opponentSide,
+    Math.round(b.left),
+    Math.round(b.top),
+    Math.round(b.right),
+    Math.round(b.bottom),
+    Math.round(p.left),
+    Math.round(p.right),
+    Math.round(p.top),
+    Math.round(p.bottom),
+    input.ballDialogueVisible ? 'dialogue' : 'play',
+  ].join('|');
+}
+
+function applyThoughtSideClass(bubble: HTMLElement, side: PaddleSide): void {
+  bubble.classList.toggle('opponent-thought-left', side === 'left');
+  bubble.classList.toggle('opponent-thought-right', side === 'right');
+}
+
+/**
+ * Position opponent thought bubble at a fixed court-side anchor.
+ * Returns false when the bark should be hidden (e.g. during ball dialogue).
+ */
+export function positionOpponentBarkBubble(input: OpponentBarkLayoutInput): boolean {
+  const { bubble } = input;
+  const anchor = computeOpponentThoughtAnchor(input);
+
+  if (!anchor) {
     return false;
   }
 
-  bubble.style.left = `${bestX}px`;
-  bubble.style.top = `${bestY}px`;
+  applyThoughtSideClass(bubble, anchor.side);
+  bubble.style.transform = 'none';
+  bubble.style.left = `${anchor.left}px`;
+  bubble.style.top = `${anchor.top}px`;
   bubble.style.visibility = 'visible';
   return true;
 }
@@ -230,8 +194,7 @@ export function buildOpponentBarkLayoutInput(
     bottom: number;
   },
   scale: { width: number; height: number },
-  ballDialogueVisible: boolean,
-  ballScreen?: { x: number; y: number }
+  ballDialogueVisible: boolean
 ): OpponentBarkLayoutInput {
   const scaleX = (canvasBounds.right - canvasBounds.left) / scale.width;
   const scaleY = (canvasBounds.bottom - canvasBounds.top) / scale.height;
@@ -253,17 +216,6 @@ export function buildOpponentBarkLayoutInput(
     right: playfieldScreen.right,
   };
 
-  const fallbackCenterScreen = {
-    x:
-      opponentSide === 'left'
-        ? playfieldScreen.left + 180 * scaleX
-        : playfieldScreen.right - 400 * scaleX,
-    y: Math.min(
-      playfieldScreen.bottom - 140 * scaleY,
-      Math.max(playfieldScreen.top + 96 * scaleY, opponentPaddleScreen.y)
-    ),
-  };
-
   return {
     bubble,
     opponentSide,
@@ -272,8 +224,6 @@ export function buildOpponentBarkLayoutInput(
     playfieldScreen,
     leftPaddleSafeScreen,
     rightPaddleSafeScreen,
-    fallbackCenterScreen,
     ballDialogueVisible,
-    ballScreen,
   };
 }

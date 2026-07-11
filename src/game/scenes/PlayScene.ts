@@ -94,6 +94,10 @@ export class PlayScene extends Phaser.Scene {
   private isPaused = false;
   private serveLock = false;
   private pausedTimeScale = 1;
+  private lastMouseClientY: number | null = null;
+  private mouseOnGameViewport = false;
+  private mousePaddleDebugTimer = 0;
+  private readonly DEBUG_MOUSE_PADDLE = true;
 
   private readonly PADDLE_THICKNESS = GAME_LAYOUT.PADDLE_THICKNESS;
   private readonly PADDLE_LENGTH = GAME_LAYOUT.PADDLE_LENGTH;
@@ -228,6 +232,7 @@ export class PlayScene extends Phaser.Scene {
 
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.setupKeyboard();
+    this.setupMousePaddleInput();
 
     const ballName = this.personality.getPersonality().name;
     const opponentName = this.opponentBarkSystem.getDisplayName();
@@ -298,6 +303,12 @@ export class PlayScene extends Phaser.Scene {
       { width: this.scale.width, height: this.scale.height },
       { compactStats, playerSide: this.playerSide }
     );
+    this.repositionOpponentBarkIfVisible();
+  }
+
+  private repositionOpponentBarkIfVisible(): void {
+    if (this.opponentBarkBubbleIsHidden()) return;
+    uiManager.updateOpponentBarkPosition(this.buildOpponentBarkLayoutInput());
   }
 
   private shouldCompactStatsPanel(): boolean {
@@ -521,6 +532,64 @@ export class PlayScene extends Phaser.Scene {
     });
   }
 
+  private setupMousePaddleInput(): void {
+    const trackPointer = (clientX: number, clientY: number) => {
+      const canvas = this.game.canvas;
+      const rect = canvas.getBoundingClientRect();
+      this.lastMouseClientY = clientY;
+      this.mouseOnGameViewport =
+        clientX >= rect.left &&
+        clientX <= rect.right &&
+        clientY >= rect.top &&
+        clientY <= rect.bottom;
+    };
+
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      const client = this.getPointerClientPosition(pointer);
+      if (client) trackPointer(client.x, client.y);
+    });
+
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      const client = this.getPointerClientPosition(pointer);
+      if (client) trackPointer(client.x, client.y);
+    });
+
+    window.addEventListener('mousemove', (event) => {
+      if (this.gameState !== 'playing' || this.isPaused) return;
+      trackPointer(event.clientX, event.clientY);
+    });
+  }
+
+  private getPointerClientPosition(
+    pointer: Phaser.Input.Pointer
+  ): { x: number; y: number } | null {
+    const evt = pointer.event as MouseEvent | TouchEvent | undefined;
+    if (evt && 'clientY' in evt) {
+      return { x: evt.clientX, y: evt.clientY };
+    }
+    const rect = this.game.canvas.getBoundingClientRect();
+    return { x: rect.left + pointer.x, y: rect.top + pointer.y };
+  }
+
+  private getScaleFitViewport(canvasRect: DOMRect): {
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+  } {
+    const gameW = this.scale.width;
+    const gameH = this.scale.height;
+    const scale = Math.min(canvasRect.width / gameW, canvasRect.height / gameH);
+    const width = gameW * scale;
+    const height = gameH * scale;
+    return {
+      offsetX: (canvasRect.width - width) / 2,
+      offsetY: (canvasRect.height - height) / 2,
+      width,
+      height,
+    };
+  }
+
   private setupKeyboard(): void {
     const kb = this.input.keyboard!;
     kb.on('keydown-T', () => this.toggleInputMode());
@@ -619,7 +688,6 @@ export class PlayScene extends Phaser.Scene {
       this.hoverMorph.syncPosition(this.ball.x, this.ball.y);
       uiManager.setCanvasBounds(this.getCanvasScreenBounds());
       this.updateBubblePosition();
-      this.refreshOpponentBarkBubble();
       return;
     }
 
@@ -669,7 +737,6 @@ export class PlayScene extends Phaser.Scene {
       this.matchSystem.opponentPoints,
       chaosHigh
     );
-    this.refreshOpponentBarkBubble();
 
     this.failsafeCheckTimer += delta;
     if (this.failsafeCheckTimer >= 5000) {
@@ -691,23 +758,51 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private movePlayerPaddle(delta: number): void {
-    const speed = 520;
-    let targetY = this.playerPaddle.y;
-
     const canvas = this.game.canvas;
     const rect = canvas.getBoundingClientRect();
-    const pointer = this.input.activePointer;
-    if (pointer.x >= rect.left && pointer.x <= rect.right && pointer.y >= rect.top && pointer.y <= rect.bottom) {
-      targetY = ((pointer.y - rect.top) / rect.height) * this.scale.height;
+    const useMouse =
+      this.mouseOnGameViewport &&
+      this.lastMouseClientY !== null &&
+      !uiManager.isDraggingDialoguePanel();
+
+    if (useMouse) {
+      const pointerYInCanvasCss = this.lastMouseClientY! - rect.top;
+      const view = this.getScaleFitViewport(rect);
+      const playfieldTopScreen =
+        view.offsetY + (this.playfieldTop / this.scale.height) * view.height;
+      const playfieldBottomScreen =
+        view.offsetY + (this.playfieldBottom / this.scale.height) * view.height;
+      const playfieldSpan = playfieldBottomScreen - playfieldTopScreen;
+      const normalizedY =
+        playfieldSpan > 0
+          ? Phaser.Math.Clamp((pointerYInCanvasCss - playfieldTopScreen) / playfieldSpan, 0, 1)
+          : 0;
+      const targetY =
+        this.playfieldTop + normalizedY * (this.playfieldBottom - this.playfieldTop);
+
+      this.playerPaddle.y = Phaser.Math.Clamp(targetY, this.paddleMinY, this.paddleMaxY);
+
+      if (this.DEBUG_MOUSE_PADDLE) {
+        this.mousePaddleDebugTimer += delta;
+        if (this.mousePaddleDebugTimer >= 200) {
+          this.mousePaddleDebugTimer = 0;
+          console.log(`[Mouse Paddle] clientY=${this.lastMouseClientY}`);
+          console.log(`[Mouse Paddle] normalizedY=${normalizedY.toFixed(3)}`);
+          console.log(`[Mouse Paddle] targetY=${targetY.toFixed(1)}`);
+          console.log(`[Mouse Paddle] actualY=${this.playerPaddle.y.toFixed(1)}`);
+        }
+      }
+    } else {
+      const speed = 520;
+      let targetY = this.playerPaddle.y;
+      if (this.cursors.up.isDown) {
+        targetY -= (speed * delta) / 1000;
+      } else if (this.cursors.down.isDown) {
+        targetY += (speed * delta) / 1000;
+      }
+      this.playerPaddle.y = Phaser.Math.Clamp(targetY, this.paddleMinY, this.paddleMaxY);
     }
 
-    if (this.cursors.up.isDown) {
-      targetY -= (speed * delta) / 1000;
-    } else if (this.cursors.down.isDown) {
-      targetY += (speed * delta) / 1000;
-    }
-
-    this.playerPaddle.y = Phaser.Math.Clamp(targetY, this.paddleMinY, this.paddleMaxY);
     this.playerPaddleBody.reset(this.playerPaddle.x, this.playerPaddle.y);
   }
 
@@ -1085,10 +1180,6 @@ export class PlayScene extends Phaser.Scene {
       this.scale.width,
       this.scale.height
     );
-    const ballScreen =
-      this.gameState === 'playing' || this.gameState === 'hover'
-        ? this.ballToScreen(this.ball.x, this.ball.y)
-        : undefined;
 
     return uiManager.buildOpponentBarkLayout(
       opponentScreen,
@@ -1100,14 +1191,8 @@ export class PlayScene extends Phaser.Scene {
         top: this.playfieldTop,
         bottom: this.playfieldBottom,
       },
-      { width: this.scale.width, height: this.scale.height },
-      ballScreen
+      { width: this.scale.width, height: this.scale.height }
     );
-  }
-
-  private refreshOpponentBarkBubble(): void {
-    if (this.opponentBarkBubbleIsHidden()) return;
-    uiManager.updateOpponentBarkPosition(this.buildOpponentBarkLayoutInput());
   }
 
   private opponentBarkBubbleIsHidden(): boolean {

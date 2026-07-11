@@ -83,9 +83,16 @@
 
     <div id="outburst-label" class="outburst-label hidden"></div>
     <div id="debug-toast" class="debug-toast hidden"></div>
-    <div id="opponent-bark-bubble" class="opponent-bark-bubble hidden">
-      <span id="opponent-bark-name" class="opponent-bark-name"></span>
-      <p id="opponent-bark-text"></p>
+    <div id="opponent-bark-bubble" class="opponent-bark-bubble opponent-thought-bubble hidden">
+      <div class="opponent-thought-body">
+        <span id="opponent-bark-name" class="opponent-bark-name"></span>
+        <p id="opponent-bark-text"></p>
+      </div>
+      <div class="opponent-thought-tail" aria-hidden="true">
+        <span class="thought-dot thought-dot-1"></span>
+        <span class="thought-dot thought-dot-2"></span>
+        <span class="thought-dot thought-dot-3"></span>
+      </div>
     </div>
     <div id="match-intro" class="match-intro hidden"></div>
     <div id="match-countdown" class="match-countdown hidden"></div>
