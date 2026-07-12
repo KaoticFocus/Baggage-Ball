@@ -42,6 +42,7 @@ export type DialogueEvent = {
   id: string;
   situation: DialogueSituation;
   ballLine: string;
+  audioCueId?: string;
   responses: DialogueResponse[];
   ballIds?: string[];
 };

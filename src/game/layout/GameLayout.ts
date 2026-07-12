@@ -18,6 +18,13 @@ export const GAME_LAYOUT = {
   SIDE_MISS_MARGIN: 42,
   /** Collapse stats into a tab when canvas is narrower than this (screen px). */
   NARROW_CANVAS_PX: 560,
+  /** Opponent thought-bubble gutter outside the playfield (screen px). */
+  OPPONENT_DIALOGUE_EDGE_PADDING: 16,
+  OPPONENT_DIALOGUE_PLAYFIELD_CLEARANCE: 16,
+  OPPONENT_DIALOGUE_GUTTER_MIN_WIDTH: 56,
+  OPPONENT_DIALOGUE_VERTICAL_EDGE_PADDING: 16,
+  /** Quantize paddle Y tracking to keep the bubble stable between small moves. */
+  OPPONENT_DIALOGUE_PADDLE_TRACK_STEP_PX: 32,
 } as const;
 
 export type PlayfieldRect = {

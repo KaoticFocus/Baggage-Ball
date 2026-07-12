@@ -18,6 +18,7 @@ import {
 import type { PlayfieldRect } from '../game/layout/GameLayout';
 import { GAME_LAYOUT } from '../game/layout/GameLayout';
 import { BALL_PERSONALITIES } from '../game/data/ballPersonalities';
+import { soundManager } from '../game/services/SoundManager';
 import { formatStatLabel } from '../game/systems/RecapSystem';
 import type { MatchRecapData } from '../game/systems/MatchRecapSystem';
 import type { BallStats } from '../game/types/BallTypes';
@@ -97,7 +98,11 @@ export class UIManager {
       const card = (e.target as HTMLElement).closest<HTMLButtonElement>('.ball-card');
       if (!card) return;
       const ballId = card.dataset.ballId;
-      if (ballId) this.handleBallSelect(ballId);
+      if (ballId) {
+        soundManager.unlock();
+        soundManager.playMenuClick();
+        this.handleBallSelect(ballId);
+      }
     });
 
     document.getElementById('recap-rematch')!.addEventListener('click', () => {
@@ -204,8 +209,23 @@ export class UIManager {
 
     applySide(getPlayerPaddleSide());
 
-    leftBtn.addEventListener('click', () => applySide('left'));
-    rightBtn.addEventListener('click', () => applySide('right'));
+    leftBtn.addEventListener('click', () => {
+      soundManager.unlock();
+      soundManager.playMenuClick();
+      applySide('left');
+    });
+    rightBtn.addEventListener('click', () => {
+      soundManager.unlock();
+      soundManager.playMenuClick();
+      applySide('right');
+    });
+  }
+
+  setSoundIndicator(enabled: boolean): void {
+    const el = document.getElementById('sound-indicator');
+    if (!el) return;
+    el.textContent = enabled ? 'SOUND ON' : 'SOUND OFF';
+    el.classList.toggle('sound-off', !enabled);
   }
 
   setCanvasBounds(bounds: ScreenBounds): void {
@@ -367,6 +387,8 @@ export class UIManager {
         <span class="opponent-card-summary">${opponent.personalitySummary}</span>
       `;
       btn.addEventListener('click', () => {
+        soundManager.unlock();
+        soundManager.playMenuClick();
         this.selectedOpponentId = opponent.opponentId;
         setSelectedOpponentId(opponent.opponentId);
         this.renderOpponentSelect();
@@ -654,7 +676,8 @@ export class UIManager {
     opponentSide: PaddleSide,
     canvasBounds: ScreenBounds,
     playfield: { left: number; right: number; top: number; bottom: number },
-    gameSize: { width: number; height: number }
+    gameSize: { width: number; height: number },
+    playerSide?: PaddleSide
   ): OpponentBarkLayoutInput {
     return buildOpponentBarkLayoutInput(
       this.opponentBarkBubble,
@@ -663,7 +686,8 @@ export class UIManager {
       canvasBounds,
       playfield,
       gameSize,
-      !this.dialogueOverlay.classList.contains('hidden')
+      !this.dialogueOverlay.classList.contains('hidden'),
+      playerSide
     );
   }
 
@@ -685,6 +709,10 @@ export class UIManager {
   showOutburst(label: string): void {
     const el = document.getElementById('outburst-label')!;
     el.textContent = label;
+    el.classList.remove('outburst-side-left', 'outburst-side-right');
+    el.classList.add(
+      this.layoutPlayerSide === 'left' ? 'outburst-side-left' : 'outburst-side-right'
+    );
     el.classList.remove('hidden');
   }
 

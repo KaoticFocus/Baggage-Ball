@@ -13,6 +13,7 @@ type RawGeneratedEvent = {
   ballIds?: string[];
   situation: string;
   ballLine: string;
+  audioCueId?: string;
   responses: Array<{
     text: string;
     tone: string;
@@ -33,6 +34,7 @@ function normalizeGenerated(raw: RawGeneratedEvent): DialogueEvent {
     id: raw.id,
     situation: raw.situation as DialogueSituation,
     ballLine: raw.ballLine,
+    audioCueId: raw.audioCueId,
     ballIds: raw.ballIds ?? (raw.ballId ? [raw.ballId] : undefined),
     responses: raw.responses.map((r) => ({
       text: r.text,

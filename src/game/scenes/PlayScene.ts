@@ -22,9 +22,14 @@ import {
 import { getEmotionalResult } from '../systems/EmotionalResultSystem';
 import { MatchSystem } from '../systems/MatchSystem';
 import { buildMatchRecap, getOpponentShortName } from '../systems/MatchRecapSystem';
-import { getBallOpeningLine, getBallPointReaction } from '../data/ballOpeningLines';
+import { getBallOpeningLineCue, getBallPointReactionCue, type BallLineCue } from '../data/ballOpeningLines';
 import { classifyPlayerResponse } from '../services/classifyResponseClient';
+import { soundManager } from '../services/SoundManager';
+import { characterAudio } from '../audio/CharacterAudioManager';
+import { mapGameEventToAudioCategory } from '../audio/characterAudioEvents';
+import type { CharacterAudioResult } from '../audio/characterAudioTypes';
 import type { HoverDecision } from '../types/DialogueTypes';
+import type { DialogueEvent } from '../types/DialogueTypes';
 import type { DialogueResponse } from '../types/DialogueTypes';
 import type { BehaviorModifier } from '../types/BallTypes';
 import {
@@ -73,7 +78,7 @@ export class PlayScene extends Phaser.Scene {
 
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private gameState: GameState = 'intro';
-  private currentEvent: import('../types/DialogueTypes').DialogueEvent | null = null;
+  private currentEvent: DialogueEvent | null = null;
   private nearMissTriggered = false;
   private lastLongRallyMilestone = 0;
   private gentleNextHit = false;
@@ -97,12 +102,19 @@ export class PlayScene extends Phaser.Scene {
   private lastMouseClientY: number | null = null;
   private mouseOnGameViewport = false;
   private mousePaddleDebugTimer = 0;
+  private characterAudioReady: Promise<void> = Promise.resolve();
   private readonly DEBUG_MOUSE_PADDLE = true;
 
   private readonly PADDLE_THICKNESS = GAME_LAYOUT.PADDLE_THICKNESS;
   private readonly PADDLE_LENGTH = GAME_LAYOUT.PADDLE_LENGTH;
   private readonly BALL_RADIUS = 12;
   private readonly SIDE_MISS_MARGIN = GAME_LAYOUT.SIDE_MISS_MARGIN;
+  private readonly POST_MISS_COMMENT_MS = 3500;
+  private readonly OPENING_BUBBLE_MIN_MS = 5000;
+  private readonly OPENING_AUDIO_TAIL_MS = 300;
+  private readonly OPENING_AUDIO_SAFE_MAX_MS = 8000;
+  private readonly STANDARD_OPENING_BUBBLE_MS = 1600;
+  private readonly STANDARD_INTRO_TO_SERVE_MS = 2200;
 
   constructor() {
     super({ key: 'PlayScene' });
@@ -200,6 +212,7 @@ export class PlayScene extends Phaser.Scene {
             this.scoring.addEvent('wallBounce');
             this.wallBounceCooldown = 200;
             this.updateUI();
+            soundManager.playWallHit();
           }
           const stats = this.personality.getStats();
           const nearMissHover = this.emotionDirector.onWallBounce(stats, this.ballId);
@@ -233,6 +246,23 @@ export class PlayScene extends Phaser.Scene {
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.setupKeyboard();
     this.setupMousePaddleInput();
+
+    soundManager.unlock();
+    this.input.once('pointerdown', () => {
+      soundManager.unlock();
+      if (this.sound.locked) {
+        this.sound.unlock();
+      }
+    });
+    uiManager.setSoundIndicator(!soundManager.isMuted());
+    characterAudio.preload(this);
+    this.characterAudioReady = characterAudio
+      .loadSelectedCharacters(this, [this.ballId, this.opponentId])
+      .catch((error) => {
+        if (import.meta.env.DEV) {
+          console.warn('[CharacterAudio] selected character load failed', error);
+        }
+      });
 
     const ballName = this.personality.getPersonality().name;
     const opponentName = this.opponentBarkSystem.getDisplayName();
@@ -406,15 +436,55 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('matchStart');
     });
 
+    if (this.ballId === 'valentine') {
+      this.time.delayedCall(900, () => this.showValentineOpeningLineBeforeServe());
+      return;
+    }
+
     this.time.delayedCall(900, () => {
       if (this.gameState !== 'intro') return;
-      uiManager.showBallComment(getBallOpeningLine(this.ballId), 1600);
+      const openingLine = getBallOpeningLineCue(this.ballId);
+      uiManager.showBallComment(openingLine.text, this.STANDARD_OPENING_BUBBLE_MS);
+      this.playBallLineAudio(openingLine);
     });
 
-    this.time.delayedCall(2200, () => {
+    this.time.delayedCall(this.STANDARD_INTRO_TO_SERVE_MS, () => {
       if (this.gameState !== 'intro') return;
       uiManager.hideMatchIntro();
       this.runServeCountdown();
+    });
+  }
+
+  private showValentineOpeningLineBeforeServe(): void {
+    if (this.gameState !== 'intro') return;
+
+    let started = false;
+    const startOpening = (): void => {
+      if (started || this.gameState !== 'intro') return;
+      started = true;
+
+      const openingLine = getBallOpeningLineCue(this.ballId);
+      const audioResult = this.playBallLineAudio(openingLine);
+      const audioDurationMs =
+        audioResult?.ok && audioResult.durationMs !== undefined
+          ? audioResult.durationMs + this.OPENING_AUDIO_TAIL_MS
+          : audioResult?.ok
+            ? this.OPENING_AUDIO_SAFE_MAX_MS
+            : 0;
+      const bubbleDurationMs = Math.max(this.OPENING_BUBBLE_MIN_MS, audioDurationMs);
+
+      uiManager.showBallComment(openingLine.text, bubbleDurationMs);
+
+      this.time.delayedCall(bubbleDurationMs, () => {
+        if (this.gameState !== 'intro') return;
+        uiManager.hideMatchIntro();
+        this.runServeCountdown();
+      });
+    };
+
+    void this.characterAudioReady.then(() => {
+      if (this.gameState !== 'intro') return;
+      startOpening();
     });
   }
 
@@ -475,13 +545,19 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('playerScores');
       this.fireOpponentBark('opponentMisses');
       uiManager.showPointFlash('You scored.');
-      uiManager.showBallComment(getBallPointReaction(this.ballId, true), 1400);
+      const pointReaction = getBallPointReactionCue(this.ballId, true);
+      uiManager.showBallComment(pointReaction.text, 1400);
+      this.playBallLineAudio(pointReaction, 'playerScored');
+      soundManager.playPlayerScore();
     } else {
       this.matchSystem.recordOpponentPoint();
       this.fireOpponentBark('playerMisses');
       this.fireOpponentBark('opponentScores');
       uiManager.showPointFlash(`${opponentShort} scored.`);
-      uiManager.showBallComment(getBallPointReaction(this.ballId, false), 1400);
+      const pointReaction = getBallPointReactionCue(this.ballId, false);
+      uiManager.showBallComment(pointReaction.text, this.POST_MISS_COMMENT_MS);
+      this.playBallLineAudio(pointReaction, 'opponentScored');
+      soundManager.playOpponentScore();
     }
 
     this.centerBall();
@@ -590,18 +666,110 @@ export class PlayScene extends Phaser.Scene {
     };
   }
 
+  private ballSpeed01(): number {
+    const v = this.ballBody.velocity;
+    const speed = Math.sqrt(v.x * v.x + v.y * v.y);
+    return Math.max(0, Math.min(1, speed / BALL_SPEED.MAX));
+  }
+
+  private playBallLineAudio(
+    line: BallLineCue,
+    scoringResult?: 'playerScored' | 'opponentScored'
+  ): CharacterAudioResult | null {
+    if (!line.audioCueId) return null;
+
+    if (import.meta.env.DEV) {
+      const audioKey = characterAudio.getAudioKey(this.ballId, line.audioCueId);
+      console.log('[PlayScene] playBallLineAudio', {
+        characterId: this.ballId,
+        audioCueId: line.audioCueId,
+        audioKey,
+        cacheHit: this.cache.audio.exists(audioKey),
+        muted: soundManager.isMuted(),
+        audioContextState: soundManager.getAudioContextState(),
+      });
+    }
+
+    const mapping = mapGameEventToAudioCategory({
+      characterId: this.ballId,
+      characterKind: 'ball',
+      scoringResult,
+    });
+    const result = characterAudio.playCue(this, this.ballId, line.audioCueId, {
+      priority: mapping?.priority ?? 'medium',
+      interrupt: 'same-or-lower',
+    });
+
+    if (import.meta.env.DEV && result && !result.ok) {
+      console.warn('[PlayScene] playBallLineAudio failed', {
+        characterId: this.ballId,
+        audioCueId: line.audioCueId,
+        result: result.result,
+        message: result.message,
+      });
+    }
+
+    return result;
+  }
+
+  private playDialogueEventAudio(event: DialogueEvent): void {
+    if (!event.audioCueId) return;
+    const mapping = mapGameEventToAudioCategory({
+      characterId: this.ballId,
+      characterKind: 'ball',
+      situation: event.situation,
+    });
+    characterAudio.playCue(this, this.ballId, event.audioCueId, {
+      priority: mapping?.priority ?? 'high',
+      interrupt: 'same-or-lower',
+    });
+  }
+
+  private isTypingInTextInput(): boolean {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName;
+    return (
+      tag === 'INPUT' ||
+      tag === 'TEXTAREA' ||
+      (el as HTMLElement).isContentEditable === true
+    );
+  }
+
   private setupKeyboard(): void {
     const kb = this.input.keyboard!;
     kb.on('keydown-T', () => this.toggleInputMode());
     kb.on('keydown-H', () => this.debugForceHover('random'));
-    kb.on('keydown-M', () => this.debugForceHover('mode'));
+    kb.on('keydown-M', (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      if (this.isTypingInTextInput()) return;
+      if (event.shiftKey) {
+        this.debugForceHover('mode');
+        return;
+      }
+      const muted = soundManager.toggleMute();
+      characterAudio.setMuted(muted);
+      uiManager.setSoundIndicator(!muted);
+      uiManager.showDebugToast(muted ? 'SOUND OFF' : 'SOUND ON');
+    });
     kb.on('keydown-O', (event: KeyboardEvent) => {
+      if (import.meta.env.DEV) {
+        console.log('[Debug Key] O detected', { shift: event.shiftKey, repeat: event.repeat });
+      }
+
+      if (event.repeat) return;
+      if (this.isTypingInTextInput()) return;
+
       if (event.shiftKey) {
         const next = this.opponentBarkSystem.cycleOpponent();
         this.opponentId = next;
         uiManager.setSelectedOpponentId(next);
         uiManager.showDebugToast(`Opponent: ${this.opponentBarkSystem.getDisplayName()}`);
         return;
+      }
+
+      if (import.meta.env.DEV) {
+        console.log('[Debug Key] O triggering opponent bark');
       }
       this.fireOpponentBark('randomGameplay', { force: true });
     });
@@ -878,6 +1046,7 @@ export class PlayScene extends Phaser.Scene {
       this.personality.getStats()
     );
     accelerateBallAfterHit(this.ballBody);
+    soundManager.playPaddleHit(this.ballSpeed01(), 'player');
 
     const stats = this.personality.getStats();
 
@@ -947,6 +1116,7 @@ export class PlayScene extends Phaser.Scene {
       false
     );
     accelerateBallAfterHit(this.ballBody);
+    soundManager.playPaddleHit(this.ballSpeed01(), 'opponent');
   }
 
   private toggleInputMode(): void {
@@ -994,6 +1164,8 @@ export class PlayScene extends Phaser.Scene {
     this.gameState = 'hover';
     this.currentEvent = event;
     this.emotionDirector.notifyHoverStarted();
+    soundManager.playHover();
+    this.playDialogueEventAudio(event);
 
     this.storedVelocity.x = this.ballBody.velocity.x;
     this.storedVelocity.y = this.ballBody.velocity.y;
@@ -1173,6 +1345,7 @@ export class PlayScene extends Phaser.Scene {
   private buildOpponentBarkLayoutInput() {
     const canvas = this.game.canvas;
     const rect = canvas.getBoundingClientRect();
+    const canvasBounds = this.getCanvasScreenBounds();
     const opponentScreen = opponentPaddleToScreen(
       this.opponentPaddle.x,
       this.opponentPaddle.y,
@@ -1180,18 +1353,21 @@ export class PlayScene extends Phaser.Scene {
       this.scale.width,
       this.scale.height
     );
+    const opponentSide: PaddleSide =
+      this.opponentPaddle.x < getPlayfieldCenterX(this.playfield) ? 'left' : 'right';
 
     return uiManager.buildOpponentBarkLayout(
       opponentScreen,
-      getOpponentPaddleSide(this.playerSide),
-      this.getCanvasScreenBounds(),
+      opponentSide,
+      canvasBounds,
       {
         left: this.playfieldLeft,
         right: this.playfieldRight,
         top: this.playfieldTop,
         bottom: this.playfieldBottom,
       },
-      { width: this.scale.width, height: this.scale.height }
+      { width: this.scale.width, height: this.scale.height },
+      this.playerSide
     );
   }
 
