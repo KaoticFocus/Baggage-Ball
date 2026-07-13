@@ -37,6 +37,7 @@ import { soundManager } from '../services/SoundManager';
 import { characterAudio } from '../audio/CharacterAudioManager';
 import { mapGameEventToAudioCategory } from '../audio/characterAudioEvents';
 import type { CharacterAudioResult } from '../audio/characterAudioTypes';
+import { speakCharacterLine } from '../services/CharacterSpeechClient';
 import type { HoverDecision } from '../types/DialogueTypes';
 import type { DialogueEvent } from '../types/DialogueTypes';
 import type { DialogueResponse } from '../types/DialogueTypes';
@@ -565,8 +566,20 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('opponentMisses');
       uiManager.showPointFlash('You scored.');
       const pointReaction = getBallPointReactionCue(this.ballId, true);
-      uiManager.showBallComment(pointReaction.text, 1400, this.getBallScreenPosition());
-      this.playBallLineAudio(pointReaction, 'playerScored');
+      const pointDuration = this.ballId === 'valentine' ? 5000 : 1400;
+      uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
+      if (this.ballId === 'valentine') {
+        const t0 = Date.now();
+        void speakCharacterLine('valentine', pointReaction.text, 'scoreReaction:playerScored')
+          .then((audioDurationMs) => {
+            if (audioDurationMs > 0) {
+              const elapsed = Date.now() - t0;
+              uiManager.extendBallComment(t0 + Math.max(5000, elapsed + audioDurationMs + 300));
+            }
+          });
+      } else {
+        this.playBallLineAudio(pointReaction, 'playerScored');
+      }
       soundManager.playPlayerScore();
     } else {
       this.matchSystem.recordOpponentPoint();
@@ -574,8 +587,20 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('opponentScores');
       uiManager.showPointFlash(`${opponentShort} scored.`);
       const pointReaction = getBallPointReactionCue(this.ballId, false);
-      uiManager.showBallComment(pointReaction.text, this.POST_MISS_COMMENT_MS, this.getBallScreenPosition());
-      this.playBallLineAudio(pointReaction, 'opponentScored');
+      const pointDuration = this.ballId === 'valentine' ? 5000 : this.POST_MISS_COMMENT_MS;
+      uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
+      if (this.ballId === 'valentine') {
+        const t0 = Date.now();
+        void speakCharacterLine('valentine', pointReaction.text, 'scoreReaction:opponentScored')
+          .then((audioDurationMs) => {
+            if (audioDurationMs > 0) {
+              const elapsed = Date.now() - t0;
+              uiManager.extendBallComment(t0 + Math.max(5000, elapsed + audioDurationMs + 300));
+            }
+          });
+      } else {
+        this.playBallLineAudio(pointReaction, 'opponentScored');
+      }
       soundManager.playOpponentScore();
     }
 
@@ -1260,6 +1285,11 @@ export class PlayScene extends Phaser.Scene {
       this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId),
       bounds
     );
+
+    // Speak Valentine's opening hover line — fires async, bubble stays until player responds
+    if (this.ballId === 'valentine') {
+      void speakCharacterLine('valentine', event.ballLine, `hover:${event.situation}`);
+    }
   }
 
   private selectResponse(index: number): void {
@@ -1499,9 +1529,23 @@ export class PlayScene extends Phaser.Scene {
       this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
     );
 
-    this.time.delayedCall(1500, () => {
-      this.resumeFromHover();
-    });
+    if (this.ballId === 'valentine') {
+      // Speak reaction; delay resume until max(5000 ms, audio duration + 300 ms)
+      const t0 = Date.now();
+      void speakCharacterLine('valentine', response.ballReaction, 'ballReaction')
+        .then((audioDurationMs) => {
+          const elapsed = Date.now() - t0;
+          const endTimeMs = t0 + Math.max(5000, elapsed + audioDurationMs + 300);
+          window.setTimeout(() => { this.resumeFromHover(); }, Math.max(0, endTimeMs - Date.now()));
+        })
+        .catch(() => {
+          window.setTimeout(() => { this.resumeFromHover(); }, 5000);
+        });
+    } else {
+      this.time.delayedCall(1500, () => {
+        this.resumeFromHover();
+      });
+    }
   }
 
   private resumeFromHover(): void {
