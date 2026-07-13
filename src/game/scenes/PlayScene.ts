@@ -1302,12 +1302,23 @@ export class PlayScene extends Phaser.Scene {
     if (this.gameState !== 'hover' || !this.currentEvent) return;
 
     uiManager.showCustomInputProcessing();
+    uiManager.showValentineThinking(this.getBallScreenPosition());
 
-    const classifyResult = await classifyPlayerResponse({
+    const voicePayload = {
+      eventType: 'typedResponse' as const,
       playerText: text,
-      ballId: this.ballId,
-      situation: this.currentEvent.situation,
-    });
+      gameState: this.buildValentineVoiceGameState(),
+      recentLines: this.valentineRecentLines,
+    };
+
+    const [classifyResult, voiceResult] = await Promise.all([
+      classifyPlayerResponse({
+        playerText: text,
+        ballId: this.ballId,
+        situation: this.currentEvent.situation,
+      }),
+      requestValentineVoice(voicePayload),
+    ]);
 
     this.personality.updateStats(classifyResult.statChanges);
     this.behaviorMod.setModifier(this.normalizeModifier(classifyResult.behaviorModifier));
@@ -1332,14 +1343,28 @@ export class PlayScene extends Phaser.Scene {
       this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
     );
 
-    await this.playValentineDynamicMoment('typedResponse', {
-      playerText: text,
-      showDialogueResult: {
-        emotionalResult,
-        playerEcho: text,
-      },
-    });
+    const ballScreen = this.getBallScreenPosition();
+    uiManager.showValentineHoverResult(emotionalResult, text);
+    uiManager.showBallComment(voiceResult.text, 120000, ballScreen);
 
+    let audioDuration = voiceResult.durationMs;
+    if (voiceResult.audioUrl) {
+      audioDuration = await playValentineAudio(voiceResult.audioUrl, voiceResult.text);
+      revokeValentineAudioUrl(voiceResult.audioUrl);
+    }
+
+    const bubbleMs = Math.max(
+      this.VALENTINE_BUBBLE_MIN_MS,
+      audioDuration + this.VALENTINE_BUBBLE_TAIL_MS
+    );
+    uiManager.showBallComment(voiceResult.text, bubbleMs, ballScreen);
+    this.recordValentineLine(voiceResult.text);
+
+    if (!voiceResult.ok && import.meta.env.DEV) {
+      console.warn('[ValentineVoice] dynamic response without audio', voiceResult.message);
+    }
+
+    await this.waitRealMs(bubbleMs);
     this.resumeFromHover();
   }
 
@@ -1397,8 +1422,13 @@ export class PlayScene extends Phaser.Scene {
 
     let audioDuration = result.durationMs;
     if (result.audioUrl) {
+      if (import.meta.env.DEV) {
+        console.log('[ValentineVoice] playing dynamic audio', { text: result.text });
+      }
       audioDuration = await playValentineAudio(result.audioUrl, result.text);
       revokeValentineAudioUrl(result.audioUrl);
+    } else if (import.meta.env.DEV) {
+      console.warn('[ValentineVoice] no audio URL for dynamic moment', result.message);
     }
 
     const bubbleMs = Math.max(

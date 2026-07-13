@@ -30,8 +30,18 @@ export type ValentineVoiceResult = {
   text: string;
   audioUrl: string | null;
   durationMs: number;
-  source: 'openai-elevenlabs' | 'cache' | 'fallback';
+  source: 'openai-elevenlabs' | 'cache' | 'text-only' | 'fallback';
   message?: string;
+};
+
+type ValentineVoiceApiResponse = {
+  ok?: boolean;
+  text?: string;
+  audioBase64?: string;
+  mimeType?: string;
+  source?: 'openai-elevenlabs' | 'cache';
+  durationMs?: number;
+  error?: string;
 };
 
 const VALENTINE_VOICE_URL = '/.netlify/functions/valentine-voice';
@@ -53,6 +63,15 @@ let lastCompletedAt = 0;
 let lastRequestFingerprint = '';
 let activeAudio: HTMLAudioElement | null = null;
 let activeObjectUrl: string | null = null;
+
+function logDev(message: string, details?: Record<string, unknown>): void {
+  if (!import.meta.env.DEV) return;
+  if (details) {
+    console.log(`[ValentineVoice] ${message}`, details);
+    return;
+  }
+  console.log(`[ValentineVoice] ${message}`);
+}
 
 function normalizeFingerprint(payload: ValentineVoiceRequest): string {
   return [
@@ -119,6 +138,7 @@ export async function playValentineAudio(url: string, spokenText = ''): Promise<
   const fallbackDuration = estimateSpeechDurationMs(spokenText);
 
   if (soundManager.isMuted()) {
+    logDev('playback skipped — muted');
     return fallbackDuration;
   }
 
@@ -136,10 +156,19 @@ export async function playValentineAudio(url: string, spokenText = ''): Promise<
     activeAudio = audio;
     activeObjectUrl = url;
 
-    const finish = (durationMs: number) => {
+    const finish = (durationMs: number, reason: string) => {
+      logDev(reason, { durationMs });
       activeAudio = null;
       resolve(durationMs);
     };
+
+    audio.addEventListener(
+      'playing',
+      () => {
+        logDev('playback started');
+      },
+      { once: true }
+    );
 
     audio.addEventListener(
       'ended',
@@ -148,7 +177,7 @@ export async function playValentineAudio(url: string, spokenText = ''): Promise<
           Number.isFinite(audio.duration) && audio.duration > 0
             ? Math.round(audio.duration * 1000)
             : fallbackDuration;
-        finish(durationMs);
+        finish(durationMs, 'playback ended');
       },
       { once: true }
     );
@@ -156,15 +185,30 @@ export async function playValentineAudio(url: string, spokenText = ''): Promise<
     audio.addEventListener(
       'error',
       () => {
-        if (import.meta.env.DEV) {
-          console.warn('[ValentineVoice] audio playback failed');
-        }
-        finish(fallbackDuration);
+        logDev('playback error', {
+          code: audio.error?.code,
+          message: audio.error?.message,
+        });
+        finish(fallbackDuration, 'playback error');
       },
       { once: true }
     );
 
-    void audio.play().catch(() => finish(fallbackDuration));
+    const startPlayback = (): void => {
+      void audio.play().catch((error) => {
+        logDev('playback play() rejected', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+        finish(fallbackDuration, 'playback rejected');
+      });
+    };
+
+    if (audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+      startPlayback();
+    } else {
+      audio.addEventListener('canplaythrough', startPlayback, { once: true });
+      audio.load();
+    }
   });
 }
 
@@ -173,14 +217,75 @@ function estimateSpeechDurationMs(text: string): number {
   return Math.max(1800, Math.min(7000, words * 280));
 }
 
-function base64ToBlobUrl(base64: string, mimeType: string): string {
+function base64ToBlobUrl(base64: string, mimeType: string): { url: string; blobSize: number } {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) {
     bytes[i] = binary.charCodeAt(i);
   }
   const blob = new Blob([bytes], { type: mimeType });
-  return URL.createObjectURL(blob);
+  return {
+    url: URL.createObjectURL(blob),
+    blobSize: blob.size,
+  };
+}
+
+function buildResultFromApi(
+  data: ValentineVoiceApiResponse,
+  sanitized: ValentineVoiceRequest
+): ValentineVoiceResult {
+  const spokenText = data.text?.trim();
+
+  if (data.ok && spokenText && data.audioBase64) {
+    if (spokenText.length > 90) {
+      logDev('rejected overlong line from server');
+      const fallbackText = pickFallbackLine(sanitized);
+      return {
+        ok: false,
+        text: fallbackText,
+        audioUrl: null,
+        durationMs: estimateSpeechDurationMs(fallbackText),
+        source: 'fallback',
+        message: 'Generated line too long',
+      };
+    }
+
+    const { url, blobSize } = base64ToBlobUrl(data.audioBase64, data.mimeType ?? 'audio/mpeg');
+    logDev('audio blob ready', {
+      audioBase64Length: data.audioBase64.length,
+      blobSize,
+      mimeType: data.mimeType ?? 'audio/mpeg',
+    });
+
+    return {
+      ok: true,
+      text: spokenText,
+      audioUrl: url,
+      durationMs: data.durationMs ?? estimateSpeechDurationMs(spokenText),
+      source: data.source ?? 'openai-elevenlabs',
+    };
+  }
+
+  if (spokenText) {
+    return {
+      ok: false,
+      text: spokenText,
+      audioUrl: null,
+      durationMs: estimateSpeechDurationMs(spokenText),
+      source: 'text-only',
+      message: data.error ?? 'Speech synthesis unavailable',
+    };
+  }
+
+  const fallbackText = pickFallbackLine(sanitized);
+  return {
+    ok: false,
+    text: fallbackText,
+    audioUrl: null,
+    durationMs: estimateSpeechDurationMs(fallbackText),
+    source: 'fallback',
+    message: data.error ?? 'Voice generation failed',
+  };
 }
 
 export async function requestValentineVoice(
@@ -189,15 +294,19 @@ export async function requestValentineVoice(
   const sanitized = sanitizePayload(payload);
   const fingerprint = normalizeFingerprint(sanitized);
 
+  logDev('requesting voice', {
+    eventType: sanitized.eventType,
+    url: VALENTINE_VOICE_URL,
+  });
+
   if (inFlightController) {
-    if (import.meta.env.DEV) {
-      console.warn('[ValentineVoice] request blocked — another request is in flight');
-    }
+    logDev('request blocked — another request is in flight');
+    const fallbackText = pickFallbackLine(sanitized);
     return {
       ok: false,
-      text: pickFallbackLine(sanitized),
+      text: fallbackText,
       audioUrl: null,
-      durationMs: 0,
+      durationMs: estimateSpeechDurationMs(fallbackText),
       source: 'fallback',
       message: 'Duplicate in-flight request',
     };
@@ -207,14 +316,13 @@ export async function requestValentineVoice(
     fingerprint === lastRequestFingerprint &&
     Date.now() - lastCompletedAt < SESSION_COOLDOWN_MS
   ) {
-    if (import.meta.env.DEV) {
-      console.warn('[ValentineVoice] request blocked — session cooldown active');
-    }
+    logDev('request blocked — session cooldown active');
+    const fallbackText = pickFallbackLine(sanitized);
     return {
       ok: false,
-      text: pickFallbackLine(sanitized),
+      text: fallbackText,
       audioUrl: null,
-      durationMs: 0,
+      durationMs: estimateSpeechDurationMs(fallbackText),
       source: 'fallback',
       message: 'Cooldown active',
     };
@@ -234,78 +342,39 @@ export async function requestValentineVoice(
 
     clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      if (import.meta.env.DEV) {
-        console.warn(`[ValentineVoice] HTTP ${response.status}`);
-      }
-      const fallbackText = pickFallbackLine(sanitized);
-      return {
-        ok: false,
-        text: fallbackText,
-        audioUrl: null,
-        durationMs: estimateSpeechDurationMs(fallbackText),
-        source: 'fallback',
-        message: 'Voice service unavailable',
-      };
+    let data: ValentineVoiceApiResponse = {};
+    try {
+      data = (await response.json()) as ValentineVoiceApiResponse;
+    } catch {
+      data = {};
     }
 
-    const data = (await response.json()) as {
-      ok?: boolean;
-      text?: string;
-      audioBase64?: string;
-      mimeType?: string;
-      source?: 'openai-elevenlabs' | 'cache';
-      durationMs?: number;
-      error?: string;
-    };
+    logDev('function response', {
+      httpStatus: response.status,
+      source: data.source,
+      ok: data.ok,
+      text: data.text,
+      audioBase64Length: data.audioBase64?.length ?? 0,
+      error: data.error,
+    });
 
-    if (!data.ok || !data.text || !data.audioBase64) {
-      if (import.meta.env.DEV) {
-        console.warn('[ValentineVoice] invalid voice response', data.error ?? 'unknown');
-      }
-      const fallbackText = pickFallbackLine(sanitized);
-      return {
-        ok: false,
-        text: fallbackText,
-        audioUrl: null,
-        durationMs: estimateSpeechDurationMs(fallbackText),
-        source: 'fallback',
-        message: data.error ?? 'Voice generation failed',
-      };
+    const result = buildResultFromApi(data, sanitized);
+
+    if (result.ok || result.source === 'text-only') {
+      lastRequestFingerprint = fingerprint;
+      lastCompletedAt = Date.now();
     }
 
-    const spokenText = data.text.trim();
-    if (spokenText.length > 90) {
-      if (import.meta.env.DEV) {
-        console.warn('[ValentineVoice] rejected overlong line from server');
-      }
-      const fallbackText = pickFallbackLine(sanitized);
-      return {
-        ok: false,
-        text: fallbackText,
-        audioUrl: null,
-        durationMs: estimateSpeechDurationMs(fallbackText),
-        source: 'fallback',
-        message: 'Generated line too long',
-      };
+    if (!response.ok && import.meta.env.DEV) {
+      console.warn(`[ValentineVoice] HTTP ${response.status}`, result.message);
     }
 
-    const audioUrl = base64ToBlobUrl(data.audioBase64, data.mimeType ?? 'audio/mpeg');
-    lastRequestFingerprint = fingerprint;
-    lastCompletedAt = Date.now();
-
-    return {
-      ok: true,
-      text: spokenText,
-      audioUrl,
-      durationMs: data.durationMs ?? estimateSpeechDurationMs(spokenText),
-      source: data.source ?? 'openai-elevenlabs',
-    };
+    return result;
   } catch (error) {
     clearTimeout(timeoutId);
-    if (import.meta.env.DEV) {
-      console.warn('[ValentineVoice] request failed', error);
-    }
+    logDev('request failed', {
+      message: error instanceof Error ? error.message : String(error),
+    });
     const fallbackText = pickFallbackLine(sanitized);
     return {
       ok: false,
