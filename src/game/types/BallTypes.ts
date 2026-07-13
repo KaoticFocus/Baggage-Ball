@@ -27,6 +27,8 @@ export type BallPersonality = {
   name: string;
   title: string;
   description: string;
+  /** Neon accent for UI tied to this ball (hex). */
+  accentColor: string;
   startingStats: BallStats;
   dialogueStyle: string;
   recapNotes: string[];

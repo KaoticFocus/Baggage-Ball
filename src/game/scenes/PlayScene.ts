@@ -24,6 +24,15 @@ import { MatchSystem } from '../systems/MatchSystem';
 import { buildMatchRecap, getOpponentShortName } from '../systems/MatchRecapSystem';
 import { getBallOpeningLineCue, getBallPointReactionCue, type BallLineCue } from '../data/ballOpeningLines';
 import { classifyPlayerResponse } from '../services/classifyResponseClient';
+import {
+  canRequestValentineVoice,
+  playValentineAudio,
+  requestValentineVoice,
+  revokeValentineAudioUrl,
+  stopValentineAudio,
+  type ValentineVoiceEventType,
+  type ValentineVoiceGameState,
+} from '../services/valentineVoiceClient';
 import { soundManager } from '../services/SoundManager';
 import { characterAudio } from '../audio/CharacterAudioManager';
 import { mapGameEventToAudioCategory } from '../audio/characterAudioEvents';
@@ -115,6 +124,12 @@ export class PlayScene extends Phaser.Scene {
   private readonly OPENING_AUDIO_SAFE_MAX_MS = 8000;
   private readonly STANDARD_OPENING_BUBBLE_MS = 1600;
   private readonly STANDARD_INTRO_TO_SERVE_MS = 2200;
+  private readonly VALENTINE_BUBBLE_MIN_MS = 5000;
+  private readonly VALENTINE_BUBBLE_TAIL_MS = 300;
+  private valentineRecentLines: string[] = [];
+  private valentineOutburstCooldownUntil = 0;
+  private valentineOutburstInFlight = false;
+  private lastValentineOutburstModifier: BehaviorModifier | null = null;
 
   constructor() {
     super({ key: 'PlayScene' });
@@ -254,6 +269,9 @@ export class PlayScene extends Phaser.Scene {
         this.sound.unlock();
       }
     });
+    soundManager.onMuteChange((muted) => {
+      if (muted) stopValentineAudio();
+    });
     uiManager.setSoundIndicator(!soundManager.isMuted());
     characterAudio.preload(this);
     this.characterAudioReady = characterAudio
@@ -268,7 +286,7 @@ export class PlayScene extends Phaser.Scene {
     const opponentName = this.opponentBarkSystem.getDisplayName();
     const opponentShort = getOpponentShortName(this.opponentId);
 
-    uiManager.showPlaying(ballName, opponentName, opponentShort);
+    uiManager.showPlaying(this.ballId, ballName, opponentName, opponentShort);
     uiManager.setCallbacks({
       onResponseSelected: (index) => this.selectResponse(index),
       onCustomResponseSubmitted: (text) => this.submitCustomResponse(text),
@@ -444,7 +462,7 @@ export class PlayScene extends Phaser.Scene {
     this.time.delayedCall(900, () => {
       if (this.gameState !== 'intro') return;
       const openingLine = getBallOpeningLineCue(this.ballId);
-      uiManager.showBallComment(openingLine.text, this.STANDARD_OPENING_BUBBLE_MS);
+      uiManager.showBallComment(openingLine.text, this.STANDARD_OPENING_BUBBLE_MS, this.getBallScreenPosition());
       this.playBallLineAudio(openingLine);
     });
 
@@ -473,7 +491,7 @@ export class PlayScene extends Phaser.Scene {
             : 0;
       const bubbleDurationMs = Math.max(this.OPENING_BUBBLE_MIN_MS, audioDurationMs);
 
-      uiManager.showBallComment(openingLine.text, bubbleDurationMs);
+      uiManager.showBallComment(openingLine.text, bubbleDurationMs, this.getBallScreenPosition());
 
       this.time.delayedCall(bubbleDurationMs, () => {
         if (this.gameState !== 'intro') return;
@@ -546,7 +564,7 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('opponentMisses');
       uiManager.showPointFlash('You scored.');
       const pointReaction = getBallPointReactionCue(this.ballId, true);
-      uiManager.showBallComment(pointReaction.text, 1400);
+      uiManager.showBallComment(pointReaction.text, 1400, this.getBallScreenPosition());
       this.playBallLineAudio(pointReaction, 'playerScored');
       soundManager.playPlayerScore();
     } else {
@@ -555,7 +573,7 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('opponentScores');
       uiManager.showPointFlash(`${opponentShort} scored.`);
       const pointReaction = getBallPointReactionCue(this.ballId, false);
-      uiManager.showBallComment(pointReaction.text, this.POST_MISS_COMMENT_MS);
+      uiManager.showBallComment(pointReaction.text, this.POST_MISS_COMMENT_MS, this.getBallScreenPosition());
       this.playBallLineAudio(pointReaction, 'opponentScored');
       soundManager.playOpponentScore();
     }
@@ -595,17 +613,38 @@ export class PlayScene extends Phaser.Scene {
       this.personality.getStats()
     );
 
-    uiManager.showMatchRecap(recap, {
-      onRematch: () =>
-        this.scene.restart({
-          ballId: this.ballId,
-          playerSide: this.playerSide,
-          opponentId: this.opponentId,
-        }),
-      onChangeBall: () => this.scene.start('MenuScene'),
-      onChangeOpponent: () => this.scene.start('MenuScene'),
-      onMainMenu: () => this.scene.start('MenuScene'),
-    });
+    const showRecap = (): void => {
+      uiManager.showMatchRecap(recap, {
+        onRematch: () =>
+          this.scene.restart({
+            ballId: this.ballId,
+            playerSide: this.playerSide,
+            opponentId: this.opponentId,
+          }),
+        onChangeBall: () => this.scene.start('MenuScene'),
+        onChangeOpponent: () => this.scene.start('MenuScene'),
+        onMainMenu: () => this.scene.start('MenuScene'),
+      });
+    };
+
+    if (this.ballId === 'valentine') {
+      void this.finishValentineEndMatch(showRecap);
+      return;
+    }
+
+    showRecap();
+  }
+
+  private async finishValentineEndMatch(showRecap: () => void): Promise<void> {
+    try {
+      await Promise.race([
+        this.playValentineDynamicMoment('postMatch'),
+        this.waitRealMs(4000),
+      ]);
+    } finally {
+      uiManager.hideBallComment();
+      showRecap();
+    }
   }
 
   private setupMousePaddleInput(): void {
@@ -918,8 +957,21 @@ export class PlayScene extends Phaser.Scene {
 
     if (this.behaviorMod.outburstLabel) {
       uiManager.showOutburst(this.behaviorMod.outburstLabel);
+      if (
+        this.ballId === 'valentine' &&
+        this.gameState === 'playing' &&
+        this.behaviorMod.activeModifier &&
+        this.behaviorMod.activeModifier !== this.lastValentineOutburstModifier &&
+        !this.valentineOutburstInFlight &&
+        Date.now() >= this.valentineOutburstCooldownUntil &&
+        Math.random() < 0.22
+      ) {
+        this.lastValentineOutburstModifier = this.behaviorMod.activeModifier;
+        void this.triggerValentineOutburst();
+      }
     } else {
       uiManager.hideOutburst();
+      this.lastValentineOutburstModifier = null;
     }
 
     this.updateUI();
@@ -1213,6 +1265,11 @@ export class PlayScene extends Phaser.Scene {
   private async submitCustomResponse(text: string): Promise<void> {
     if (this.gameState !== 'hover' || !this.currentEvent) return;
 
+    if (this.ballId === 'valentine') {
+      await this.submitValentineCustomResponse(text);
+      return;
+    }
+
     uiManager.showCustomInputProcessing();
 
     const result = await classifyPlayerResponse({
@@ -1232,6 +1289,145 @@ export class PlayScene extends Phaser.Scene {
       },
       text
     );
+  }
+
+  private async submitValentineCustomResponse(text: string): Promise<void> {
+    if (this.gameState !== 'hover' || !this.currentEvent) return;
+
+    uiManager.showCustomInputProcessing();
+
+    const classifyResult = await classifyPlayerResponse({
+      playerText: text,
+      ballId: this.ballId,
+      situation: this.currentEvent.situation,
+    });
+
+    this.personality.updateStats(classifyResult.statChanges);
+    this.behaviorMod.setModifier(this.normalizeModifier(classifyResult.behaviorModifier));
+    if (classifyResult.behaviorModifier === 'gentleReturn') {
+      this.gentleNextHit = true;
+    }
+
+    const ballName = this.personality.getPersonality().name;
+    const emotionalResult =
+      classifyResult.emotionalResult ??
+      getEmotionalResult(
+        this.ballId,
+        ballName,
+        classifyResult.statChanges,
+        classifyResult.tone as DialogueResponse['tone']
+      );
+
+    this.recentEvents.push(`player: ${text.slice(0, 50)}`);
+    uiManager.updateStats(this.personality.getStats());
+    uiManager.updateBallMeta(
+      this.currentHoverType,
+      this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+    );
+
+    await this.playValentineDynamicMoment('typedResponse', {
+      playerText: text,
+      showDialogueResult: {
+        emotionalResult,
+        playerEcho: text,
+      },
+    });
+
+    this.resumeFromHover();
+  }
+
+  private buildValentineVoiceGameState(): ValentineVoiceGameState {
+    const stats = this.personality.getStats();
+    return {
+      playerScore: this.matchSystem.playerPoints,
+      opponentScore: this.matchSystem.opponentPoints,
+      rally: this.scoring.rallyCount,
+      mood: this.emotionDirector.getMoodLabel(stats, this.ballId).toLowerCase(),
+      trust: stats.trust,
+      resentment: stats.resentment,
+      attachment: stats.attachment,
+      chaos: stats.chaos,
+    };
+  }
+
+  private recordValentineLine(line: string): void {
+    this.valentineRecentLines = [line, ...this.valentineRecentLines].slice(0, 5);
+  }
+
+  private waitRealMs(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+  }
+
+  private async playValentineDynamicMoment(
+    eventType: ValentineVoiceEventType,
+    options?: {
+      playerText?: string;
+      showDialogueResult?: { emotionalResult: string; playerEcho?: string };
+      waitForBubble?: boolean;
+    }
+  ): Promise<void> {
+    const payload = {
+      eventType,
+      playerText: options?.playerText,
+      gameState: this.buildValentineVoiceGameState(),
+      recentLines: this.valentineRecentLines,
+    };
+
+    uiManager.showValentineThinking(this.getBallScreenPosition());
+    const result = await requestValentineVoice(payload);
+    const ballScreen = this.getBallScreenPosition();
+
+    if (options?.showDialogueResult) {
+      uiManager.showValentineHoverResult(
+        options.showDialogueResult.emotionalResult,
+        options.showDialogueResult.playerEcho
+      );
+    }
+
+    uiManager.showBallComment(result.text, 120000, ballScreen);
+
+    let audioDuration = result.durationMs;
+    if (result.audioUrl) {
+      audioDuration = await playValentineAudio(result.audioUrl, result.text);
+      revokeValentineAudioUrl(result.audioUrl);
+    }
+
+    const bubbleMs = Math.max(
+      this.VALENTINE_BUBBLE_MIN_MS,
+      audioDuration + this.VALENTINE_BUBBLE_TAIL_MS
+    );
+    uiManager.showBallComment(result.text, bubbleMs, ballScreen);
+    this.recordValentineLine(result.text);
+
+    if (!result.ok && import.meta.env.DEV) {
+      console.warn('[ValentineVoice] dynamic moment used fallback', result.message);
+    }
+
+    if (options?.waitForBubble !== false) {
+      await this.waitRealMs(bubbleMs);
+    }
+  }
+
+  private async triggerValentineOutburst(): Promise<void> {
+    if (this.valentineOutburstInFlight || this.gameState !== 'playing') return;
+
+    const payload = {
+      eventType: 'outburst' as const,
+      gameState: this.buildValentineVoiceGameState(),
+      recentLines: this.valentineRecentLines,
+    };
+    if (!canRequestValentineVoice(payload)) return;
+
+    this.valentineOutburstInFlight = true;
+    this.valentineOutburstCooldownUntil = Date.now() + 50000;
+
+    try {
+      await this.playValentineDynamicMoment('outburst', { waitForBubble: false });
+    } finally {
+      this.valentineOutburstInFlight = false;
+    }
   }
 
   private normalizeModifier(mod?: string): BehaviorModifier | undefined {
@@ -1328,6 +1524,10 @@ export class PlayScene extends Phaser.Scene {
       x: rect.left + (x / this.scale.width) * rect.width,
       y: rect.top + (y / this.scale.height) * rect.height,
     };
+  }
+
+  private getBallScreenPosition(): { x: number; y: number } {
+    return this.ballToScreen(this.ball.x, this.ball.y);
   }
 
   private fireOpponentBark(

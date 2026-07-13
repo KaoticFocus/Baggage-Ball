@@ -12,6 +12,11 @@ import {
   recapResponseSchema,
 } from './schemas.js';
 
+import {
+  handleValentineVoiceRequest,
+  parseValentineVoiceRequest,
+} from './valentineVoiceCore.js';
+
 const PORT = Number(process.env.LOCAL_AI_PORT ?? 8787);
 const MODEL = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -153,6 +158,17 @@ Return JSON only.`;
     console.error('[generate-recap]', err);
     res.status(500).json({ error: 'Failed to generate recap' });
   }
+});
+
+app.post('/api/valentine-voice', async (req, res) => {
+  const request = parseValentineVoiceRequest(req.body);
+  if (!request) {
+    res.status(400).json({ ok: false, error: 'Invalid request body' });
+    return;
+  }
+
+  const result = await handleValentineVoiceRequest(request);
+  res.status(result.ok ? 200 : 503).json(result);
 });
 
 app.listen(PORT, () => {

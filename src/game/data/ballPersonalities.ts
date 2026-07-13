@@ -5,6 +5,7 @@ export const BALL_PERSONALITIES: BallPersonality[] = [
     id: 'orb',
     name: 'Orb',
     title: 'Diva Existentialist',
+    accentColor: '#aa66ff',
     description:
       'A bored, theatrical ball that believes bouncing is performance art.',
     startingStats: {
@@ -28,6 +29,7 @@ export const BALL_PERSONALITIES: BallPersonality[] = [
     id: 'bolt',
     name: 'Bolt',
     title: 'Moody Bad-Day Ball',
+    accentColor: '#44aa66',
     description:
       'An irritated ball having a terrible day. It does not want your energy.',
     startingStats: {
@@ -51,6 +53,7 @@ export const BALL_PERSONALITIES: BallPersonality[] = [
     id: 'valentine',
     name: 'Valentine',
     title: 'Over-Attached Ex-Ball',
+    accentColor: '#ff4466',
     description:
       'A melodramatic ex-ball who remembers that you stopped playing and has questions.',
     startingStats: {

@@ -17,7 +17,7 @@ import {
 } from './opponentBarkLayout';
 import type { PlayfieldRect } from '../game/layout/GameLayout';
 import { GAME_LAYOUT } from '../game/layout/GameLayout';
-import { BALL_PERSONALITIES } from '../game/data/ballPersonalities';
+import { BALL_PERSONALITIES, getPersonalityById } from '../game/data/ballPersonalities';
 import { soundManager } from '../game/services/SoundManager';
 import { formatStatLabel } from '../game/systems/RecapSystem';
 import type { MatchRecapData } from '../game/systems/MatchRecapSystem';
@@ -40,6 +40,8 @@ import {
 
 const OPPONENT_BARK_DISPLAY_MS = 6400;
 const OPPONENT_BARK_FADE_MS = 500;
+const BALL_COMMENT_SCORE_HUD_CLEARANCE_PX = 96;
+const BALL_COMMENT_PLAYFIELD_PADDING_PX = 12;
 
 export class UIManager {
   private menuOverlay = document.getElementById('menu-overlay')!;
@@ -75,7 +77,12 @@ export class UIManager {
   private matchCountdown = document.getElementById('match-countdown')!;
   private pointFlash = document.getElementById('point-flash')!;
   private ballComment = document.getElementById('ball-comment')!;
+  private ballCommentSpeaker = document.getElementById('ball-comment-speaker')!;
+  private ballCommentText = document.getElementById('ball-comment-text')!;
   private ballCommentTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeBallId = 'orb';
+  private playfieldScreenBounds: ScreenBounds | null = null;
+  private lastBallCommentScreen: { x: number; y: number } | null = null;
   private opponentBarkTimer: ReturnType<typeof setTimeout> | null = null;
   private opponentBarkFadeTimer: ReturnType<typeof setTimeout> | null = null;
   private opponentBarkLayoutKey = '';
@@ -270,6 +277,21 @@ export class UIManager {
     if (!this.dialogueOverlay.classList.contains('hidden')) {
       this.positionDialogueCluster(false);
     }
+
+    const playfieldLeft = canvasBounds.left + playfield.left * scaleX;
+    const playfieldRight = canvasBounds.left + playfield.right * scaleX;
+    const playfieldTop = canvasBounds.top + playfield.top * scaleY;
+    const playfieldBottom = canvasBounds.top + playfield.bottom * scaleY;
+    this.playfieldScreenBounds = {
+      left: playfieldLeft,
+      top: playfieldTop,
+      right: playfieldRight,
+      bottom: playfieldBottom,
+    };
+
+    if (!this.ballComment.classList.contains('hidden')) {
+      this.repositionBallComment();
+    }
   }
 
   resetDialoguePanelPosition(): void {
@@ -425,7 +447,9 @@ export class UIManager {
     this.hideOpponentBark();
   }
 
-  showPlaying(ballName: string, opponentName: string, opponentShortName: string): void {
+  showPlaying(ballId: string, ballName: string, opponentName: string, opponentShortName: string): void {
+    this.activeBallId = ballId;
+    this.applyBallCommentTheme();
     this.menuOverlay.classList.add('hidden');
     this.recapOverlay.classList.add('hidden');
     this.hud.classList.remove('hidden');
@@ -482,11 +506,127 @@ export class UIManager {
     this.pointFlash.classList.add('hidden');
   }
 
-  showBallComment(text: string, durationMs = 1800): void {
-    this.ballComment.textContent = text;
+  showBallComment(
+    text: string,
+    durationMs = 1800,
+    ballScreen?: { x: number; y: number }
+  ): void {
+    const personality = getPersonalityById(this.activeBallId);
+    this.ballCommentSpeaker.textContent = (personality?.name ?? 'Ball').toUpperCase();
+    this.ballCommentText.textContent = text;
+    this.applyBallCommentTheme();
     this.ballComment.classList.remove('hidden');
+    this.lastBallCommentScreen = ballScreen ?? null;
+    this.repositionBallComment();
     if (this.ballCommentTimer) clearTimeout(this.ballCommentTimer);
     this.ballCommentTimer = setTimeout(() => this.hideBallComment(), durationMs);
+  }
+
+  private applyBallCommentTheme(): void {
+    const personality = getPersonalityById(this.activeBallId);
+    const accent = personality?.accentColor ?? '#aa66ff';
+    const glow = this.hexToRgba(accent, 0.28);
+    const label = this.lightenHex(accent, 0.28);
+    this.ballComment.style.setProperty('--ball-comment-accent', accent);
+    this.ballComment.style.setProperty('--ball-comment-accent-label', label);
+    this.ballComment.style.setProperty('--ball-comment-glow', glow);
+  }
+
+  private repositionBallComment(): void {
+    if (this.ballComment.classList.contains('hidden')) return;
+
+    const bounds = this.playfieldScreenBounds ?? this.canvasBounds;
+    if (!bounds) return;
+
+    const anchor = this.lastBallCommentScreen ?? {
+      x: (bounds.left + bounds.right) / 2,
+      y: (bounds.top + bounds.bottom) / 2,
+    };
+
+    this.positionBallCommentNearBall(anchor.x, anchor.y, bounds);
+  }
+
+  private positionBallCommentNearBall(
+    ballScreenX: number,
+    ballScreenY: number,
+    playfieldBounds: ScreenBounds
+  ): void {
+    const bubble = this.ballComment;
+    const padding = BALL_COMMENT_PLAYFIELD_PADDING_PX;
+    const minTop = Math.max(
+      playfieldBounds.top + padding,
+      BALL_COMMENT_SCORE_HUD_CLEARANCE_PX
+    );
+
+    bubble.style.visibility = 'hidden';
+    bubble.style.left = `${ballScreenX}px`;
+    bubble.style.top = `${ballScreenY}px`;
+
+    const bubbleWidth = bubble.offsetWidth || 300;
+    const bubbleHeight = bubble.offsetHeight || 88;
+    const tailGap = 10;
+
+    const placeAbove = ballScreenY - bubbleHeight - tailGap - padding >= minTop;
+    bubble.classList.toggle('ball-comment--below', !placeAbove);
+
+    let top: number;
+    let transform: string;
+
+    if (placeAbove) {
+      top = ballScreenY - tailGap;
+      transform = 'translate(-50%, -100%)';
+      top = Math.max(minTop + bubbleHeight, top);
+      top = Math.min(top, playfieldBounds.bottom - padding);
+    } else {
+      top = ballScreenY + tailGap;
+      transform = 'translate(-50%, 0)';
+      top = Math.max(minTop, top);
+      top = Math.min(top, playfieldBounds.bottom - padding - bubbleHeight);
+    }
+
+    let left = ballScreenX;
+    const halfW = bubbleWidth / 2;
+    const minX = playfieldBounds.left + padding + halfW;
+    const maxX = playfieldBounds.right - padding - halfW;
+    left = Math.min(maxX, Math.max(minX, left));
+
+    bubble.style.left = `${left}px`;
+    bubble.style.top = `${top}px`;
+    bubble.style.transform = transform;
+    bubble.style.visibility = 'visible';
+  }
+
+  private hexToRgba(hex: string, alpha: number): string {
+    const normalized = hex.replace('#', '');
+    const value =
+      normalized.length === 3
+        ? normalized
+            .split('')
+            .map((ch) => ch + ch)
+            .join('')
+        : normalized;
+    const r = Number.parseInt(value.slice(0, 2), 16);
+    const g = Number.parseInt(value.slice(2, 4), 16);
+    const b = Number.parseInt(value.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  private lightenHex(hex: string, amount: number): string {
+    const normalized = hex.replace('#', '');
+    const value =
+      normalized.length === 3
+        ? normalized
+            .split('')
+            .map((ch) => ch + ch)
+            .join('')
+        : normalized;
+    const channels = [0, 2, 4].map((start) =>
+      Number.parseInt(value.slice(start, start + 2), 16)
+    );
+    const lightened = channels.map((channel) =>
+      Math.min(255, Math.round(channel + (255 - channel) * amount))
+    );
+    return `#${lightened.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
   }
 
   hideBallComment(): void {
@@ -582,6 +722,32 @@ export class UIManager {
     const submitBtn = document.getElementById('text-response-submit') as HTMLButtonElement;
     input.disabled = false;
     submitBtn.disabled = false;
+  }
+
+  showValentineThinking(ballScreen?: { x: number; y: number }): void {
+    this.ballCommentSpeaker.textContent = 'VALENTINE';
+    this.ballCommentText.textContent = 'Valentine is thinking…';
+    this.applyBallCommentTheme();
+    this.ballComment.classList.remove('hidden');
+    this.lastBallCommentScreen = ballScreen ?? null;
+    this.repositionBallComment();
+  }
+
+  showValentineHoverResult(emotionalResult: string, playerEcho?: string): void {
+    document.getElementById('response-panel')!.classList.add('hidden');
+    document.getElementById('ball-reaction')!.classList.add('hidden');
+    document.getElementById('hover-banner')!.classList.add('hidden');
+
+    if (playerEcho) {
+      const echo = document.getElementById('player-response-echo')!;
+      echo.textContent = `You: "${truncateHoverText(playerEcho, 100)}"`;
+      echo.classList.remove('hidden');
+    }
+
+    const resultEl = document.getElementById('emotional-result')!;
+    resultEl.textContent = emotionalResult;
+    resultEl.classList.remove('hidden');
+    requestAnimationFrame(() => this.positionDialogueCluster(false));
   }
 
   showCustomInputProcessing(): void {
