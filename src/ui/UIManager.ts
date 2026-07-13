@@ -129,7 +129,13 @@ export class UIManager {
       this.handleTextSubmit();
     });
     document.getElementById('text-response-input')!.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') this.handleTextSubmit();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        this.handleTextSubmit();
+        e.stopPropagation();
+        return;
+      }
+      e.stopPropagation();
     });
 
     this.pauseBtn.addEventListener('click', () => this.onPauseToggle?.());

@@ -58,6 +58,7 @@ import {
   type PlayfieldRect,
 } from '../layout/GameLayout';
 import type { ScreenBounds } from '../../ui/dialogueBubbleLayout';
+import { isTypingInFormField } from '../../ui/formInput';
 
 type GameState = 'intro' | 'countdown' | 'playing' | 'hover' | 'pointBreak' | 'matchEnd';
 
@@ -764,24 +765,22 @@ export class PlayScene extends Phaser.Scene {
     });
   }
 
-  private isTypingInTextInput(): boolean {
-    const el = document.activeElement;
-    if (!el) return false;
-    const tag = el.tagName;
-    return (
-      tag === 'INPUT' ||
-      tag === 'TEXTAREA' ||
-      (el as HTMLElement).isContentEditable === true
-    );
-  }
 
   private setupKeyboard(): void {
     const kb = this.input.keyboard!;
-    kb.on('keydown-T', () => this.toggleInputMode());
-    kb.on('keydown-H', () => this.debugForceHover('random'));
+    const blockIfTyping = (): boolean => isTypingInFormField();
+
+    kb.on('keydown-T', () => {
+      if (blockIfTyping()) return;
+      this.toggleInputMode();
+    });
+    kb.on('keydown-H', () => {
+      if (blockIfTyping()) return;
+      this.debugForceHover('random');
+    });
     kb.on('keydown-M', (event: KeyboardEvent) => {
       if (event.repeat) return;
-      if (this.isTypingInTextInput()) return;
+      if (blockIfTyping()) return;
       if (event.shiftKey) {
         this.debugForceHover('mode');
         return;
@@ -797,7 +796,7 @@ export class PlayScene extends Phaser.Scene {
       }
 
       if (event.repeat) return;
-      if (this.isTypingInTextInput()) return;
+      if (blockIfTyping()) return;
 
       if (event.shiftKey) {
         const next = this.opponentBarkSystem.cycleOpponent();
@@ -813,6 +812,7 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('randomGameplay', { force: true });
     });
     kb.on('keydown-R', (event: KeyboardEvent) => {
+      if (blockIfTyping()) return;
       if (event.shiftKey) {
         uiManager.resetDialoguePanelPosition();
         return;
@@ -826,6 +826,7 @@ export class PlayScene extends Phaser.Scene {
       uiManager.showDebugToast('+Resentment');
     });
     kb.on('keydown-C', () => {
+      if (blockIfTyping()) return;
       this.personality.updateStats({ chaos: 15 });
       uiManager.updateStats(this.personality.getStats());
       uiManager.updateBallMeta(
@@ -835,6 +836,7 @@ export class PlayScene extends Phaser.Scene {
       uiManager.showDebugToast('+Chaos');
     });
     kb.on('keydown-D', () => {
+      if (blockIfTyping()) return;
       this.personality.updateStats({ dramaNeed: 15 });
       uiManager.updateStats(this.personality.getStats());
       uiManager.updateBallMeta(
@@ -844,6 +846,7 @@ export class PlayScene extends Phaser.Scene {
       uiManager.showDebugToast('+DramaNeed');
     });
     kb.on('keydown-A', () => {
+      if (blockIfTyping()) return;
       this.personality.updateStats({ attachment: 15 });
       uiManager.updateStats(this.personality.getStats());
       uiManager.updateBallMeta(
@@ -853,18 +856,22 @@ export class PlayScene extends Phaser.Scene {
       uiManager.showDebugToast('+Attachment');
     });
     kb.on('keydown-[', () => {
+      if (blockIfTyping()) return;
       this.opponentAi.adjustDifficulty(-1);
       uiManager.showDebugToast(`Opponent: ${this.opponentAi.getDifficultyTier()}`);
     });
     kb.on('keydown-]', () => {
+      if (blockIfTyping()) return;
       this.opponentAi.adjustDifficulty(1);
       uiManager.showDebugToast(`Opponent: ${this.opponentAi.getDifficultyTier()}`);
     });
     kb.on('keydown-SPACE', () => {
+      if (blockIfTyping()) return;
       if (this.gameState === 'hover') this.selectResponse(0);
     });
     for (let i = 1; i <= 4; i++) {
       kb.on(`keydown-${i}`, () => {
+        if (blockIfTyping()) return;
         if (this.gameState === 'hover') this.selectResponse(i - 1);
       });
     }
