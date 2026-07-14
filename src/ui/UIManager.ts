@@ -83,6 +83,7 @@ export class UIManager {
   private activeBallId = 'orb';
   private playfieldScreenBounds: ScreenBounds | null = null;
   private lastBallCommentScreen: { x: number; y: number } | null = null;
+  private ballCommentEndTime = 0;
   private opponentBarkTimer: ReturnType<typeof setTimeout> | null = null;
   private opponentBarkFadeTimer: ReturnType<typeof setTimeout> | null = null;
   private opponentBarkLayoutKey = '';
@@ -525,6 +526,7 @@ export class UIManager {
     this.lastBallCommentScreen = ballScreen ?? null;
     this.repositionBallComment();
     if (this.ballCommentTimer) clearTimeout(this.ballCommentTimer);
+    this.ballCommentEndTime = Date.now() + durationMs;
     this.ballCommentTimer = setTimeout(() => this.hideBallComment(), durationMs);
   }
 
@@ -633,6 +635,24 @@ export class UIManager {
       Math.min(255, Math.round(channel + (255 - channel) * amount))
     );
     return `#${lightened.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`;
+  }
+
+  /**
+   * Extend the currently visible ball-comment bubble so it stays until
+   * `newAbsoluteEndTimeMs` (epoch ms).  Never shortens an existing timer.
+   * No-op if the bubble is already hidden.
+   */
+  extendBallComment(newAbsoluteEndTimeMs: number): void {
+    if (this.ballComment.classList.contains('hidden')) return;
+    if (newAbsoluteEndTimeMs <= this.ballCommentEndTime) return;
+    if (this.ballCommentTimer) clearTimeout(this.ballCommentTimer);
+    this.ballCommentEndTime = newAbsoluteEndTimeMs;
+    const remaining = newAbsoluteEndTimeMs - Date.now();
+    if (remaining > 0) {
+      this.ballCommentTimer = setTimeout(() => this.hideBallComment(), remaining);
+    } else {
+      this.hideBallComment();
+    }
   }
 
   hideBallComment(): void {
