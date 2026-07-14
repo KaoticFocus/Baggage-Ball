@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 import type { Handler } from '@netlify/functions';
 import {
   handleCharacterSpeechRequest,
@@ -39,7 +38,6 @@ export const handler: Handler = async (event) => {
 
   const result = await handleCharacterSpeechRequest(request);
   return jsonResponse(result.ok ? 200 : 503, result);
-=======
 import type { Handler } from "@netlify/functions";
 
 /**
@@ -174,5 +172,8 @@ export const handler: Handler = async (event) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ audioBase64, mimeType, text }),
   };
+<<<<<<< HEAD
+>>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
+=======
 >>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
 };

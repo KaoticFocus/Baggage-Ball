@@ -555,7 +555,8 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('opponentMisses');
       uiManager.showPointFlash('You scored.');
       const pointReaction = getBallPointReactionCue(this.ballId, true);
-<<<<<<< HEAD
+      const pointDuration = this.ballId === 'valentine' ? 5000 : 1400;
+      uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
       if (this.ballId === 'valentine') {
         void speakValentineLine(pointReaction.text, {
           eventType: 'scoreReaction',
@@ -564,8 +565,6 @@ export class PlayScene extends Phaser.Scene {
           waitForPlayback: false,
         });
       } else {
-        uiManager.showBallComment(pointReaction.text, 1400, this.getBallScreenPosition());
-=======
       const pointDuration = this.ballId === 'valentine' ? 5000 : 1400;
       uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
       if (this.ballId === 'valentine') {
@@ -578,6 +577,9 @@ export class PlayScene extends Phaser.Scene {
             }
           });
       } else {
+<<<<<<< HEAD
+>>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
+=======
 >>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
         this.playBallLineAudio(pointReaction, 'playerScored');
       }
@@ -588,17 +590,8 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('opponentScores');
       uiManager.showPointFlash(`${opponentShort} scored.`);
       const pointReaction = getBallPointReactionCue(this.ballId, false);
-<<<<<<< HEAD
-      if (this.ballId === 'valentine') {
-        void speakValentineLine(pointReaction.text, {
-          eventType: 'missReaction',
-          priority: 'medium',
-          ballScreen: this.getBallScreenPosition(),
-          waitForPlayback: false,
-        });
-      } else {
-        uiManager.showBallComment(pointReaction.text, this.POST_MISS_COMMENT_MS, this.getBallScreenPosition());
-=======
+        this.playBallLineAudio(pointReaction, 'playerScored');
+      }
       const pointDuration = this.ballId === 'valentine' ? 5000 : this.POST_MISS_COMMENT_MS;
       uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
       if (this.ballId === 'valentine') {
@@ -611,6 +604,9 @@ export class PlayScene extends Phaser.Scene {
             }
           });
       } else {
+<<<<<<< HEAD
+>>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
+=======
 >>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
         this.playBallLineAudio(pointReaction, 'opponentScored');
       }
@@ -1550,39 +1546,16 @@ export class PlayScene extends Phaser.Scene {
         this.resumeFromHover();
       });
     }
-  }
-
-  private async applyValentineResponse(response: DialogueResponse, playerEcho?: string): Promise<void> {
-    if (!this.currentEvent) return;
-
-    this.personality.updateStats(response.statChanges);
-    this.behaviorMod.setModifier(response.behaviorModifier);
-
-    if (response.behaviorModifier === 'gentleReturn') {
-      this.gentleNextHit = true;
-    }
-
-    const ballName = this.personality.getPersonality().name;
-    const emotionalResult =
-      response.emotionalResult ??
-      getEmotionalResult(this.ballId, ballName, response.statChanges, response.tone);
-
-    this.recentEvents.push(`player: ${(playerEcho ?? response.text).slice(0, 50)}`);
-    uiManager.showReaction(response.ballReaction, emotionalResult, playerEcho);
-    uiManager.updateStats(this.personality.getStats());
-    uiManager.updateBallMeta(
-      this.currentHoverType,
-      this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
-    );
-
-    await speakValentineLine(response.ballReaction, {
-      eventType: 'responseReaction',
-      priority: 'high',
-      ballScreen: this.getBallScreenPosition(),
-      waitForPlayback: true,
-    });
-
-    this.resumeFromHover();
+      const pointDuration = this.ballId === 'valentine' ? 5000 : this.POST_MISS_COMMENT_MS;
+      uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
+      if (this.ballId === 'valentine') {
+        void speakValentineLine(pointReaction.text, {
+          eventType: 'missReaction',
+          priority: 'medium',
+          ballScreen: this.getBallScreenPosition(),
+          waitForPlayback: false,
+        });
+      } else {
   }
 
   private resumeFromHover(): void {
