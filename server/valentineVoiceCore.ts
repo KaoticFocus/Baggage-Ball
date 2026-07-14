@@ -33,10 +33,7 @@ export type ValentineVoiceRequest = {
 export type ValentineVoiceSuccess = {
   ok: true;
   text: string;
-  audioBase64: string;
-  mimeType: 'audio/mpeg';
-  source: 'openai-elevenlabs' | 'cache';
-  durationMs?: number;
+  source: 'openai';
 };
 
 export type ValentineVoiceFailure = {
@@ -61,8 +58,6 @@ const FALLBACK_LINES = [
   'I am the rally. You are the risk.',
 ] as const;
 
-const audioCache = new Map<string, { audioBase64: string; mimeType: 'audio/mpeg'; text: string }>();
-
 function isDevLogEnabled(): boolean {
   return process.env.NODE_ENV !== 'production';
 }
@@ -79,8 +74,6 @@ function logDev(message: string, details?: Record<string, unknown>): void {
 function missingEnvVars(): string[] {
   const missing: string[] = [];
   if (!process.env.OPENAI_API_KEY) missing.push('OPENAI_API_KEY');
-  if (!process.env.ELEVENLABS_API_KEY) missing.push('ELEVENLABS_API_KEY');
-  if (!process.env.ELEVENLABS_VOICE_VALENTINE) missing.push('ELEVENLABS_VOICE_VALENTINE');
   return missing;
 }
 
@@ -251,69 +244,6 @@ function pickFallbackLine(request: ValentineVoiceRequest): string {
   return FALLBACK_LINES[seed % FALLBACK_LINES.length];
 }
 
-function getAudioCacheKey(text: string, modelId: string, voiceId: string): string {
-  return `${voiceId}:${modelId}:${text.toLowerCase()}`;
-}
-
-async function synthesizeWithElevenLabs(text: string): Promise<Buffer> {
-  const apiKey = process.env.ELEVENLABS_API_KEY;
-  const voiceId = process.env.ELEVENLABS_VOICE_VALENTINE;
-  const modelId = process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5';
-
-  if (!apiKey || !voiceId) {
-    throw new Error('ElevenLabs is not configured');
-  }
-
-  const cacheKey = getAudioCacheKey(text, modelId, voiceId);
-  const cached = audioCache.get(cacheKey);
-  if (cached) {
-    logDev('ElevenLabs cache hit', { audioBytes: Buffer.from(cached.audioBase64, 'base64').length });
-    return Buffer.from(cached.audioBase64, 'base64');
-  }
-
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'xi-api-key': apiKey,
-      'Content-Type': 'application/json',
-      Accept: 'audio/mpeg',
-    },
-    body: JSON.stringify({
-      text,
-      model_id: modelId,
-      voice_settings: {
-        stability: 0.42,
-        similarity_boost: 0.78,
-        style: 0.55,
-        use_speaker_boost: true,
-      },
-    }),
-  });
-
-  logDev('ElevenLabs response', { statusCode: response.status });
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => '');
-    console.error('[valentine-voice] ElevenLabs synthesis failed', {
-      statusCode: response.status,
-      body: errorBody.slice(0, 300),
-    });
-    throw new Error(`ElevenLabs synthesis failed (${response.status})`);
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  logDev('ElevenLabs audio ready', { audioBytes: buffer.length });
-  audioCache.set(cacheKey, {
-    audioBase64: buffer.toString('base64'),
-    mimeType: 'audio/mpeg',
-    text,
-  });
-  return buffer;
-}
-
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
@@ -345,64 +275,23 @@ export async function handleValentineVoiceRequest(
 
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  const voiceId = process.env.ELEVENLABS_VOICE_VALENTINE!;
-  const modelId = process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5';
-
-  let generatedText = '';
 
   try {
-    generatedText = await withTimeout(
+    const generatedText = await withTimeout(
       resolveValentineText(client, model, request),
-      VALENTINE_VOICE_LIMITS.COMBINED_TIMEOUT_MS - 1500,
+      VALENTINE_VOICE_LIMITS.COMBINED_TIMEOUT_MS,
       'OpenAI'
     );
     logDev('generated text', { text: generatedText, length: generatedText.length });
 
-    const cacheKey = getAudioCacheKey(generatedText, modelId, voiceId);
-    const cached = audioCache.get(cacheKey);
-    if (cached) {
-      const audioBytes = Buffer.from(cached.audioBase64, 'base64').length;
-      logDev('returning cached audio', { audioBytes });
-      return {
-        ok: true,
-        text: generatedText,
-        audioBase64: cached.audioBase64,
-        mimeType: 'audio/mpeg',
-        source: 'cache',
-      };
-    }
-
-    const audioBuffer = await withTimeout(
-      synthesizeWithElevenLabs(generatedText),
-      VALENTINE_VOICE_LIMITS.COMBINED_TIMEOUT_MS - 1500,
-      'ElevenLabs'
-    );
-
-    logDev('returning synthesized audio', { audioBytes: audioBuffer.length });
-
     return {
       ok: true,
       text: generatedText,
-      audioBase64: audioBuffer.toString('base64'),
-      mimeType: 'audio/mpeg',
-      source: 'openai-elevenlabs',
+      source: 'openai',
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Voice generation unavailable';
-    console.error('[valentine-voice] generation failed', {
-      stage: generatedText ? 'elevenlabs' : 'openai',
-      message,
-      text: generatedText || undefined,
-    });
-
-    if (generatedText) {
-      return {
-        ok: false,
-        error: 'Speech synthesis unavailable',
-        text: generatedText,
-      };
-    }
-
+    console.error('[valentine-voice] generation failed', { message });
     return { ok: false, error: 'Voice generation unavailable' };
   }
 }

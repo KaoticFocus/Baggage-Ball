@@ -26,13 +26,15 @@ import { getBallOpeningLineCue, getBallPointReactionCue, type BallLineCue } from
 import { classifyPlayerResponse } from '../services/classifyResponseClient';
 import {
   canRequestValentineVoice,
-  playValentineAudio,
   requestValentineVoice,
-  revokeValentineAudioUrl,
-  stopValentineAudio,
   type ValentineVoiceEventType,
   type ValentineVoiceGameState,
 } from '../services/valentineVoiceClient';
+import {
+  mapDialogueSituationToSpeechEvent,
+  speakValentineLine,
+  stopValentineSpeech,
+} from '../services/valentineSpeech';
 import { soundManager } from '../services/SoundManager';
 import { characterAudio } from '../audio/CharacterAudioManager';
 import { mapGameEventToAudioCategory } from '../audio/characterAudioEvents';
@@ -112,7 +114,6 @@ export class PlayScene extends Phaser.Scene {
   private lastMouseClientY: number | null = null;
   private mouseOnGameViewport = false;
   private mousePaddleDebugTimer = 0;
-  private characterAudioReady: Promise<void> = Promise.resolve();
   private readonly DEBUG_MOUSE_PADDLE = true;
 
   private readonly PADDLE_THICKNESS = GAME_LAYOUT.PADDLE_THICKNESS;
@@ -120,13 +121,9 @@ export class PlayScene extends Phaser.Scene {
   private readonly BALL_RADIUS = 12;
   private readonly SIDE_MISS_MARGIN = GAME_LAYOUT.SIDE_MISS_MARGIN;
   private readonly POST_MISS_COMMENT_MS = 3500;
-  private readonly OPENING_BUBBLE_MIN_MS = 5000;
-  private readonly OPENING_AUDIO_TAIL_MS = 300;
   private readonly OPENING_AUDIO_SAFE_MAX_MS = 8000;
   private readonly STANDARD_OPENING_BUBBLE_MS = 1600;
   private readonly STANDARD_INTRO_TO_SERVE_MS = 2200;
-  private readonly VALENTINE_BUBBLE_MIN_MS = 5000;
-  private readonly VALENTINE_BUBBLE_TAIL_MS = 300;
   private valentineRecentLines: string[] = [];
   private valentineOutburstCooldownUntil = 0;
   private valentineOutburstInFlight = false;
@@ -271,12 +268,16 @@ export class PlayScene extends Phaser.Scene {
       }
     });
     soundManager.onMuteChange((muted) => {
-      if (muted) stopValentineAudio();
+      if (muted) stopValentineSpeech();
     });
     uiManager.setSoundIndicator(!soundManager.isMuted());
     characterAudio.preload(this);
-    this.characterAudioReady = characterAudio
-      .loadSelectedCharacters(this, [this.ballId, this.opponentId])
+    const charactersToLoad = [
+      ...(this.ballId !== 'valentine' ? [this.ballId] : []),
+      this.opponentId,
+    ];
+    void characterAudio
+      .loadSelectedCharacters(this, charactersToLoad)
       .catch((error) => {
         if (import.meta.env.DEV) {
           console.warn('[CharacterAudio] selected character load failed', error);
@@ -477,34 +478,22 @@ export class PlayScene extends Phaser.Scene {
   private showValentineOpeningLineBeforeServe(): void {
     if (this.gameState !== 'intro') return;
 
-    let started = false;
-    const startOpening = (): void => {
-      if (started || this.gameState !== 'intro') return;
-      started = true;
-
+    void (async () => {
       const openingLine = getBallOpeningLineCue(this.ballId);
-      const audioResult = this.playBallLineAudio(openingLine);
-      const audioDurationMs =
-        audioResult?.ok && audioResult.durationMs !== undefined
-          ? audioResult.durationMs + this.OPENING_AUDIO_TAIL_MS
-          : audioResult?.ok
-            ? this.OPENING_AUDIO_SAFE_MAX_MS
-            : 0;
-      const bubbleDurationMs = Math.max(this.OPENING_BUBBLE_MIN_MS, audioDurationMs);
+      await Promise.race([
+        speakValentineLine(openingLine.text, {
+          eventType: 'opening',
+          priority: 'high',
+          ballScreen: this.getBallScreenPosition(),
+          waitForPlayback: true,
+        }),
+        this.waitRealMs(this.OPENING_AUDIO_SAFE_MAX_MS),
+      ]);
 
-      uiManager.showBallComment(openingLine.text, bubbleDurationMs, this.getBallScreenPosition());
-
-      this.time.delayedCall(bubbleDurationMs, () => {
-        if (this.gameState !== 'intro') return;
-        uiManager.hideMatchIntro();
-        this.runServeCountdown();
-      });
-    };
-
-    void this.characterAudioReady.then(() => {
       if (this.gameState !== 'intro') return;
-      startOpening();
-    });
+      uiManager.hideMatchIntro();
+      this.runServeCountdown();
+    })();
   }
 
   private runServeCountdown(): void {
@@ -565,8 +554,17 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('opponentMisses');
       uiManager.showPointFlash('You scored.');
       const pointReaction = getBallPointReactionCue(this.ballId, true);
-      uiManager.showBallComment(pointReaction.text, 1400, this.getBallScreenPosition());
-      this.playBallLineAudio(pointReaction, 'playerScored');
+      if (this.ballId === 'valentine') {
+        void speakValentineLine(pointReaction.text, {
+          eventType: 'scoreReaction',
+          priority: 'medium',
+          ballScreen: this.getBallScreenPosition(),
+          waitForPlayback: false,
+        });
+      } else {
+        uiManager.showBallComment(pointReaction.text, 1400, this.getBallScreenPosition());
+        this.playBallLineAudio(pointReaction, 'playerScored');
+      }
       soundManager.playPlayerScore();
     } else {
       this.matchSystem.recordOpponentPoint();
@@ -574,8 +572,17 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('opponentScores');
       uiManager.showPointFlash(`${opponentShort} scored.`);
       const pointReaction = getBallPointReactionCue(this.ballId, false);
-      uiManager.showBallComment(pointReaction.text, this.POST_MISS_COMMENT_MS, this.getBallScreenPosition());
-      this.playBallLineAudio(pointReaction, 'opponentScored');
+      if (this.ballId === 'valentine') {
+        void speakValentineLine(pointReaction.text, {
+          eventType: 'missReaction',
+          priority: 'medium',
+          ballScreen: this.getBallScreenPosition(),
+          waitForPlayback: false,
+        });
+      } else {
+        uiManager.showBallComment(pointReaction.text, this.POST_MISS_COMMENT_MS, this.getBallScreenPosition());
+        this.playBallLineAudio(pointReaction, 'opponentScored');
+      }
       soundManager.playOpponentScore();
     }
 
@@ -716,6 +723,7 @@ export class PlayScene extends Phaser.Scene {
     line: BallLineCue,
     scoringResult?: 'playerScored' | 'opponentScored'
   ): CharacterAudioResult | null {
+    if (this.ballId === 'valentine') return null;
     if (!line.audioCueId) return null;
 
     if (import.meta.env.DEV) {
@@ -753,6 +761,7 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private playDialogueEventAudio(event: DialogueEvent): void {
+    if (this.ballId === 'valentine') return;
     if (!event.audioCueId) return;
     const mapping = mapGameEventToAudioCategory({
       characterId: this.ballId,
@@ -1226,6 +1235,15 @@ export class PlayScene extends Phaser.Scene {
     soundManager.playHover();
     this.playDialogueEventAudio(event);
 
+    if (this.ballId === 'valentine') {
+      void speakValentineLine(event.ballLine, {
+        eventType: mapDialogueSituationToSpeechEvent(event.situation),
+        priority: 'medium',
+        ballScreen: this.getBallScreenPosition(),
+        waitForPlayback: false,
+      });
+    }
+
     this.storedVelocity.x = this.ballBody.velocity.x;
     this.storedVelocity.y = this.ballBody.velocity.y;
     this.ballBody.setVelocity(0, 0);
@@ -1266,6 +1284,10 @@ export class PlayScene extends Phaser.Scene {
     if (this.gameState !== 'hover' || !this.currentEvent) return;
     const response = this.currentEvent.responses[index];
     if (!response) return;
+    if (this.ballId === 'valentine') {
+      void this.applyValentineResponse(response, response.text);
+      return;
+    }
     this.applyResponse(response, response.text);
   }
 
@@ -1345,26 +1367,19 @@ export class PlayScene extends Phaser.Scene {
 
     const ballScreen = this.getBallScreenPosition();
     uiManager.showValentineHoverResult(emotionalResult, text);
-    uiManager.showBallComment(voiceResult.text, 120000, ballScreen);
 
-    let audioDuration = voiceResult.durationMs;
-    if (voiceResult.audioUrl) {
-      audioDuration = await playValentineAudio(voiceResult.audioUrl, voiceResult.text);
-      revokeValentineAudioUrl(voiceResult.audioUrl);
+    const speechResult = await speakValentineLine(voiceResult.text, {
+      eventType: 'typedResponse',
+      priority: 'high',
+      ballScreen,
+      waitForPlayback: true,
+    });
+    this.recordValentineLine(speechResult.text);
+
+    if (!speechResult.ok && import.meta.env.DEV) {
+      console.warn('[ValentineSpeech] dynamic response without audio', speechResult.message);
     }
 
-    const bubbleMs = Math.max(
-      this.VALENTINE_BUBBLE_MIN_MS,
-      audioDuration + this.VALENTINE_BUBBLE_TAIL_MS
-    );
-    uiManager.showBallComment(voiceResult.text, bubbleMs, ballScreen);
-    this.recordValentineLine(voiceResult.text);
-
-    if (!voiceResult.ok && import.meta.env.DEV) {
-      console.warn('[ValentineVoice] dynamic response without audio', voiceResult.message);
-    }
-
-    await this.waitRealMs(bubbleMs);
     this.resumeFromHover();
   }
 
@@ -1409,7 +1424,6 @@ export class PlayScene extends Phaser.Scene {
 
     uiManager.showValentineThinking(this.getBallScreenPosition());
     const result = await requestValentineVoice(payload);
-    const ballScreen = this.getBallScreenPosition();
 
     if (options?.showDialogueResult) {
       uiManager.showValentineHoverResult(
@@ -1418,32 +1432,16 @@ export class PlayScene extends Phaser.Scene {
       );
     }
 
-    uiManager.showBallComment(result.text, 120000, ballScreen);
+    const speechResult = await speakValentineLine(result.text, {
+      eventType,
+      priority: 'high',
+      ballScreen: this.getBallScreenPosition(),
+      waitForPlayback: options?.waitForBubble !== false,
+    });
+    this.recordValentineLine(speechResult.text);
 
-    let audioDuration = result.durationMs;
-    if (result.audioUrl) {
-      if (import.meta.env.DEV) {
-        console.log('[ValentineVoice] playing dynamic audio', { text: result.text });
-      }
-      audioDuration = await playValentineAudio(result.audioUrl, result.text);
-      revokeValentineAudioUrl(result.audioUrl);
-    } else if (import.meta.env.DEV) {
-      console.warn('[ValentineVoice] no audio URL for dynamic moment', result.message);
-    }
-
-    const bubbleMs = Math.max(
-      this.VALENTINE_BUBBLE_MIN_MS,
-      audioDuration + this.VALENTINE_BUBBLE_TAIL_MS
-    );
-    uiManager.showBallComment(result.text, bubbleMs, ballScreen);
-    this.recordValentineLine(result.text);
-
-    if (!result.ok && import.meta.env.DEV) {
-      console.warn('[ValentineVoice] dynamic moment used fallback', result.message);
-    }
-
-    if (options?.waitForBubble !== false) {
-      await this.waitRealMs(bubbleMs);
+    if (!speechResult.ok && import.meta.env.DEV) {
+      console.warn('[ValentineSpeech] dynamic moment without audio', speechResult.message);
     }
   }
 
@@ -1502,6 +1500,39 @@ export class PlayScene extends Phaser.Scene {
     this.time.delayedCall(1500, () => {
       this.resumeFromHover();
     });
+  }
+
+  private async applyValentineResponse(response: DialogueResponse, playerEcho?: string): Promise<void> {
+    if (!this.currentEvent) return;
+
+    this.personality.updateStats(response.statChanges);
+    this.behaviorMod.setModifier(response.behaviorModifier);
+
+    if (response.behaviorModifier === 'gentleReturn') {
+      this.gentleNextHit = true;
+    }
+
+    const ballName = this.personality.getPersonality().name;
+    const emotionalResult =
+      response.emotionalResult ??
+      getEmotionalResult(this.ballId, ballName, response.statChanges, response.tone);
+
+    this.recentEvents.push(`player: ${(playerEcho ?? response.text).slice(0, 50)}`);
+    uiManager.showReaction(response.ballReaction, emotionalResult, playerEcho);
+    uiManager.updateStats(this.personality.getStats());
+    uiManager.updateBallMeta(
+      this.currentHoverType,
+      this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+    );
+
+    await speakValentineLine(response.ballReaction, {
+      eventType: 'responseReaction',
+      priority: 'high',
+      ballScreen: this.getBallScreenPosition(),
+      waitForPlayback: true,
+    });
+
+    this.resumeFromHover();
   }
 
   private resumeFromHover(): void {

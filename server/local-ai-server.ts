@@ -13,6 +13,11 @@ import {
 } from './schemas.js';
 
 import {
+  handleCharacterSpeechRequest,
+  parseCharacterSpeechRequest,
+} from './characterSpeechCore.js';
+
+import {
   handleValentineVoiceRequest,
   parseValentineVoiceRequest,
 } from './valentineVoiceCore.js';
@@ -168,6 +173,17 @@ app.post('/api/valentine-voice', async (req, res) => {
   }
 
   const result = await handleValentineVoiceRequest(request);
+  res.status(result.ok ? 200 : 503).json(result);
+});
+
+app.post('/api/character-speech', async (req, res) => {
+  const request = parseCharacterSpeechRequest(req.body);
+  if (!request) {
+    res.status(400).json({ ok: false, error: 'Invalid request body' });
+    return;
+  }
+
+  const result = await handleCharacterSpeechRequest(request);
   res.status(result.ok ? 200 : 503).json(result);
 });
 

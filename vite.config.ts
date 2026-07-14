@@ -11,6 +11,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '/api/valentine-voice',
       },
+      '/.netlify/functions/character-speech': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+        rewrite: () => '/api/character-speech',
+      },
     },
   },
   build: {
