@@ -52,6 +52,12 @@ import type { HoverDecision } from '../types/DialogueTypes';
 import type { DialogueEvent } from '../types/DialogueTypes';
 import type { DialogueResponse } from '../types/DialogueTypes';
 import type { BehaviorModifier } from '../types/BallTypes';
+import { STAT_LABELS } from '../types/BallTypes';
+import {
+  getEmotionalResponseEffects,
+  type EmotionalResponseCharacterId,
+  type EmotionalResponseMode,
+} from '../data/emotionalResponseModes';
 import {
   getOpponentPaddleSide,
   getPlayerPaddleSide,
@@ -349,6 +355,7 @@ export class PlayScene extends Phaser.Scene {
     uiManager.showPlaying(this.ballId, ballName, opponentName, opponentShort);
     uiManager.setCallbacks({
       onResponseSelected: (index) => this.selectResponse(index),
+      onEmotionalResponseSelected: (mode) => void this.submitEmotionalResponse(mode),
       onCustomResponseSubmitted: (text) => this.submitCustomResponse(text),
     });
     uiManager.setGameControlCallbacks({
@@ -974,12 +981,6 @@ export class PlayScene extends Phaser.Scene {
       if (blockIfTyping()) return;
       if (this.gameState === 'hover') this.selectResponse(0);
     });
-    for (let i = 1; i <= 4; i++) {
-      kb.on(`keydown-${i}`, () => {
-        if (blockIfTyping()) return;
-        if (this.gameState === 'hover') this.selectResponse(i - 1);
-      });
-    }
   }
 
   update(_time: number, delta: number): void {
@@ -1411,6 +1412,34 @@ export class PlayScene extends Phaser.Scene {
     );
   }
 
+  private async submitEmotionalResponse(mode: EmotionalResponseMode): Promise<void> {
+    if (this.gameState !== 'hover' || !this.currentEvent) return;
+
+    uiManager.showCustomInputProcessing();
+    const result = await classifyPlayerResponse({
+      playerText: '',
+      ballId: this.ballId,
+      situation: this.currentEvent.situation,
+      responseModeId: mode.id,
+      responseModeName: mode.label,
+      responseModeDescription: mode.description,
+    });
+
+    const playerEcho = mode.id === 'go-silent' ? undefined : result.playerResponse.trim() || undefined;
+    this.applyAiResult(
+      {
+        text: result.playerResponse,
+        tone: result.tone as DialogueResponse['tone'],
+        statChanges: result.statChanges,
+        ballReaction: result.ballReaction,
+        emotionalResult: result.emotionalResult,
+        behaviorModifier: this.normalizeModifier(result.behaviorModifier),
+      },
+      playerEcho,
+      mode
+    );
+  }
+
   private async submitValentineCustomResponse(text: string): Promise<void> {
     if (this.gameState !== 'hover' || !this.currentEvent) return;
 
@@ -1666,14 +1695,31 @@ export class PlayScene extends Phaser.Scene {
     return mod as BehaviorModifier;
   }
 
-  private applyAiResult(response: DialogueResponse, playerEcho: string): void {
-    this.applyResponse(response, playerEcho);
+  private applyAiResult(
+    response: DialogueResponse,
+    playerEcho: string | undefined,
+    mode?: EmotionalResponseMode
+  ): void {
+    this.applyResponse(response, playerEcho, mode);
   }
 
-  private applyResponse(response: DialogueResponse, playerEcho?: string): void {
+  private applyResponse(
+    response: DialogueResponse,
+    playerEcho?: string,
+    mode?: EmotionalResponseMode
+  ): void {
     if (!this.currentEvent) return;
 
-    this.personality.updateStats(response.statChanges);
+    const characterId: EmotionalResponseCharacterId =
+      this.ballId === 'valentine'
+        ? 'valentine'
+        : this.opponentId === 'midlifeDave'
+          ? 'midlifeDave'
+          : 'default';
+    const statChanges = mode
+      ? getEmotionalResponseEffects(mode.id, characterId, this.ballId)
+      : response.statChanges;
+    this.personality.updateStats(statChanges);
     this.behaviorMod.setModifier(response.behaviorModifier);
 
     if (response.behaviorModifier === 'gentleReturn') {
@@ -1683,10 +1729,13 @@ export class PlayScene extends Phaser.Scene {
     const ballName = this.personality.getPersonality().name;
     const emotionalResult =
       response.emotionalResult ??
-      getEmotionalResult(this.ballId, ballName, response.statChanges, response.tone);
+      getEmotionalResult(this.ballId, ballName, statChanges, response.tone);
+
+    const modeResult = mode ? this.formatEmotionalModeResult(mode, statChanges) : undefined;
 
     this.recentEvents.push(`player: ${(playerEcho ?? response.text).slice(0, 50)}`);
-    uiManager.showReaction(response.ballReaction, emotionalResult, playerEcho);
+    uiManager.showReaction(response.ballReaction, modeResult ?? emotionalResult, playerEcho);
+    if (modeResult) uiManager.showDebugToast(modeResult);
     uiManager.updateStats(this.personality.getStats());
     uiManager.updateBallMeta(
       this.currentHoverType,
@@ -1729,6 +1778,17 @@ export class PlayScene extends Phaser.Scene {
     });
 
     this.resumeFromHover();
+  }
+
+  private formatEmotionalModeResult(
+    mode: EmotionalResponseMode,
+    statChanges: Partial<import('../types/BallTypes').BallStats>
+  ): string {
+    const changes = Object.entries(statChanges)
+      .filter(([, value]) => value)
+      .map(([key, value]) => `${STAT_LABELS[key as keyof typeof STAT_LABELS]} ${value! > 0 ? '+' : ''}${value}`)
+      .join(', ');
+    return `${mode.label.toUpperCase()}: ${changes || 'No measurable shift'}`;
   }
 
   private resumeFromHover(): void {

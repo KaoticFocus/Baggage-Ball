@@ -37,6 +37,12 @@ import {
   type PanelLayoutContext,
   type SavedPanelPosition,
 } from './responsePanelLayout';
+import {
+  EMOTIONAL_RESPONSE_MODES,
+  getEmotionalResponseMode,
+  type EmotionalResponseMode,
+  type EmotionalResponseModeId,
+} from '../game/data/emotionalResponseModes';
 
 const OPPONENT_BARK_DISPLAY_MS = 6400;
 const OPPONENT_BARK_FADE_MS = 500;
@@ -56,6 +62,7 @@ export class UIManager {
   private onBallSelected?: (ballId: string) => void;
   private ballSelectHandler?: (ballId: string, playerSide: PaddleSide, opponentId: OpponentId) => void;
   private onResponseSelected?: (index: number) => void;
+  private onEmotionalResponseSelected?: (mode: EmotionalResponseMode) => void;
   private onCustomResponseRequested?: () => void;
   private onCustomResponseSubmitted?: (text: string) => void;
   private onRecapRematch?: () => void;
@@ -96,6 +103,7 @@ export class UIManager {
   private dragOffsetX = 0;
   private dragOffsetY = 0;
   private dragMoved = false;
+  private selectedEmotionalResponseModeId: EmotionalResponseModeId = 'validate';
 
   constructor() {
     this.renderBallSelect();
@@ -141,11 +149,22 @@ export class UIManager {
 
     this.pauseBtn.addEventListener('click', () => this.onPauseToggle?.());
     document.getElementById('hud-quit-btn')!.addEventListener('click', () => this.onQuit?.());
+    this.renderEmotionalInventory();
+    document.addEventListener('keydown', (event) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      const mode = EMOTIONAL_RESPONSE_MODES.find((candidate) => candidate.key === event.key);
+      if (!mode) return;
+      this.selectEmotionalResponseMode(mode.id);
+      event.preventDefault();
+    });
   }
 
   setCallbacks(callbacks: {
     onBallSelected?: (ballId: string) => void;
     onResponseSelected?: (index: number) => void;
+    onEmotionalResponseSelected?: (mode: EmotionalResponseMode) => void;
     onCustomResponseRequested?: () => void;
     onCustomResponseSubmitted?: (text: string) => void;
     onRecapRematch?: () => void;
@@ -157,6 +176,9 @@ export class UIManager {
   }): void {
     if (callbacks.onBallSelected !== undefined) this.onBallSelected = callbacks.onBallSelected;
     if (callbacks.onResponseSelected !== undefined) this.onResponseSelected = callbacks.onResponseSelected;
+    if (callbacks.onEmotionalResponseSelected !== undefined) {
+      this.onEmotionalResponseSelected = callbacks.onEmotionalResponseSelected;
+    }
     if (callbacks.onCustomResponseRequested !== undefined) {
       this.onCustomResponseRequested = callbacks.onCustomResponseRequested;
     }
@@ -686,6 +708,32 @@ export class UIManager {
     if (moodEl) moodEl.textContent = mood;
   }
 
+  getSelectedEmotionalResponseMode(): EmotionalResponseMode {
+    return getEmotionalResponseMode(this.selectedEmotionalResponseModeId);
+  }
+
+  private selectEmotionalResponseMode(id: EmotionalResponseModeId): void {
+    this.selectedEmotionalResponseModeId = id;
+    this.renderEmotionalInventory();
+    this.onEmotionalResponseSelected?.(getEmotionalResponseMode(id));
+  }
+
+  private renderEmotionalInventory(): void {
+    const inventory = document.getElementById('emotional-inventory');
+    if (!inventory) return;
+    inventory.innerHTML = EMOTIONAL_RESPONSE_MODES.map((mode) => `
+      <button type="button" class="emotional-slot${mode.id === this.selectedEmotionalResponseModeId ? ' emotional-slot-selected' : ''}" data-mode-id="${mode.id}" title="${mode.description}">
+        <span class="emotional-slot-key">${mode.key}</span><span class="emotional-slot-label">${mode.label}</span>
+      </button>
+    `).join('');
+    inventory.querySelectorAll<HTMLButtonElement>('.emotional-slot').forEach((button) => {
+      button.addEventListener('click', () => {
+        const modeId = button.dataset.modeId as EmotionalResponseModeId | undefined;
+        if (modeId) this.selectEmotionalResponseMode(modeId);
+      });
+    });
+  }
+
   showDialogue(
     event: DialogueEvent,
     _mode: InputMode,
@@ -799,6 +847,7 @@ export class UIManager {
 
   showCustomInputProcessing(): void {
     this.customInputVisible = false;
+    document.getElementById('response-choices')!.classList.add('hidden');
     document.getElementById('ball-line')!.textContent = 'Ball is processing...';
     const input = document.getElementById('text-response-input') as HTMLInputElement;
     const submitBtn = document.getElementById('text-response-submit') as HTMLButtonElement;

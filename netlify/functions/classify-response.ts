@@ -13,6 +13,15 @@ function safeParseJson(text: string) {
   }
 }
 
+function underWordLimit(value: unknown, limit: number): string {
+  return String(value || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, limit)
+    .join(' ');
+}
+
 export const handler: Handler = async (event) => {
   if (event.httpMethod !== "POST") {
     return {
@@ -32,6 +41,9 @@ export const handler: Handler = async (event) => {
   const playerText = String(body.playerText || "").slice(0, 500);
   const ballId = String(body.ballId || "unknown");
   const situation = String(body.situation || "hoverResponse");
+  const responseModeId = String(body.responseModeId || "");
+  const responseModeName = String(body.responseModeName || "");
+  const responseModeDescription = String(body.responseModeDescription || "");
 
   const response = await client.responses.create({
     model: process.env.OPENAI_MODEL || "gpt-5.4-mini",
@@ -48,10 +60,18 @@ export const handler: Handler = async (event) => {
           playerText,
           ballId,
           situation,
+          responseMode: responseModeId
+            ? {
+                id: responseModeId,
+                name: responseModeName,
+                description: responseModeDescription,
+              }
+            : null,
           requiredShape: {
             ok: true,
             source: "openai",
             tone: "string",
+            playerResponse: "string under 18 words; empty string only when responseMode.id is go-silent",
             emotionalResult: "string",
             ballReaction: "string",
             statChanges: {
@@ -66,6 +86,9 @@ export const handler: Handler = async (event) => {
             behaviorModifier: "none | speedUp | slowDown | fakeOut | clingyHover | chaosWobble"
           },
           rules: [
+            "If responseMode is provided, it is the player's selected emotional mode and you MUST follow it; do not substitute another mode.",
+            "Generate playerResponse as a short player line matching the selected mode, with fewer than 18 words.",
+            "For go-silent, playerResponse must be an empty string, but still write a ballReaction that reacts to the silence.",
             "Keep ballReaction short, funny, and in-character.",
             "Do not include profanity.",
             "Do not include sexual content.",
@@ -87,6 +110,7 @@ export const handler: Handler = async (event) => {
         ok: true,
         source: "fallback",
         tone: "uncertain",
+        playerResponse: responseModeId === "go-silent" ? "" : responseModeName ? `${responseModeName}.` : "",
         emotionalResult: "The ball processed your words and made them about itself.",
         ballReaction: "I heard you. I simply chose to suffer differently.",
         statChanges: {
@@ -108,7 +132,8 @@ export const handler: Handler = async (event) => {
     body: JSON.stringify({
       ok: true,
       source: "openai",
-      ...parsed
+      ...parsed,
+      playerResponse: underWordLimit(parsed.playerResponse, 17)
     }),
   };
 };

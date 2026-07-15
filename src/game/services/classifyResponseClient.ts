@@ -8,6 +8,7 @@ export type NetlifyClassifyResult = {
   ok: boolean;
   source: 'openai' | 'fallback' | 'stub';
   tone: string;
+  playerResponse: string;
   emotionalResult: string;
   ballReaction: string;
   statChanges: {
@@ -29,6 +30,7 @@ const FALLBACK_RESULT: NetlifyClassifyResult = {
   ok: true,
   source: 'fallback',
   tone: 'uncertain',
+  playerResponse: '',
   emotionalResult: 'The ball absorbed your words and made them its whole personality.',
   ballReaction: 'I heard you. I simply chose to process this privately.',
   statChanges: {
@@ -47,6 +49,9 @@ export async function classifyPlayerResponse(payload: {
   playerText: string;
   ballId: string;
   situation: string;
+  responseModeId?: string;
+  responseModeName?: string;
+  responseModeDescription?: string;
 }): Promise<NetlifyClassifyResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
