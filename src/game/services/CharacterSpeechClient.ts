@@ -2,33 +2,47 @@
  * CharacterSpeechClient — client-side ElevenLabs TTS for named characters.
  *
  * Usage:
- *   const durationMs = await speakCharacterLine('valentine', text, 'hover:clingyInterruption');
+ *   const durationMs = await speakCharacterLine('midlife-dave', text, 'opponentBark:playerMisses');
  *   const bubbleMs = Math.max(5000, durationMs + 300);
  *
- * Only 'valentine' is supported. All others return 0 immediately.
+ * Supported character ids are the ones the server-side character-speech flow
+ * accepts (currently 'valentine' and 'midlife-dave'). Valentine's own scripted
+ * lines are voiced via valentineSpeech.ts; this client is used for opponent
+ * characters (Midlife Dave) that display their own labelled chat bubble.
+ *
+ * All speech routes through the same server endpoint used by Valentine:
+ *   /.netlify/functions/character-speech
  *
  * Cache: repeated identical lines (normalised) reuse the cached data-URL within
  * the current page session — no repeated ElevenLabs calls for the same text.
  *
- * Concurrency: Only one Valentine clip may play at a time.
- * Calling speakCharacterLine while a clip is already playing interrupts it.
+ * Concurrency: Only one clip on this lane may play at a time. Calling
+ * speakCharacterLine while a clip is already playing interrupts it.
+ *
+ * Sound On/Off: respects the global mute + voice volume from SoundManager. When
+ * muted, no audio plays and 0 is returned (the caller keeps showing the bubble).
  */
 
-/** In-session cache: normalised text → audio data-URL */
+import { soundManager } from './SoundManager';
+
+/** Character ids this client is allowed to request audio for. */
+const SUPPORTED_CHARACTER_IDS = new Set(['valentine', 'midlife-dave']);
+
+/** In-session cache: `${characterId}:${normalisedText}` → audio data-URL */
 const speechCache = new Map<string, string>();
 
-/** Currently playing Valentine audio element, if any. */
+/** Currently playing audio element on this lane, if any. */
 let currentAudio: HTMLAudioElement | null = null;
 
-function normaliseCacheKey(text: string): string {
-  return text.trim().toLowerCase().replace(/\s+/g, ' ');
+function normaliseCacheKey(characterId: string, text: string): string {
+  return `${characterId}:${text.trim().toLowerCase().replace(/\s+/g, ' ')}`;
 }
 
 /**
- * Stop any currently playing Valentine audio clip immediately.
+ * Stop any currently playing character audio clip immediately.
  * Safe to call when nothing is playing.
  */
-export function stopValentineSpeech(): void {
+export function stopCharacterSpeech(): void {
   if (currentAudio) {
     currentAudio.pause();
     currentAudio.src = '';
@@ -37,11 +51,11 @@ export function stopValentineSpeech(): void {
 }
 
 /**
- * Synthesise and play a single Valentine voice line via the server function.
+ * Synthesise and play a single character voice line via the server function.
  *
- * - Interrupts any currently playing Valentine clip before starting.
- * - Returns the audio duration in ms once the audio has loaded and started playing.
- * - Returns 0 if the character is not 'valentine', text is empty,
+ * - Interrupts any currently playing clip on this lane before starting.
+ * - Returns the audio duration in ms once the audio has loaded and started.
+ * - Returns 0 if the character is unsupported, text is empty, sound is muted,
  *   synthesis fails, or playback is blocked.
  *
  * Development logs written to console:
@@ -53,23 +67,28 @@ export function stopValentineSpeech(): void {
 export async function speakCharacterLine(
   characterId: string,
   text: string,
-  eventType: string,
-  volume = 1.0
+  eventType: string
 ): Promise<number> {
   console.log(
     `[Speech] eventType=${eventType} characterId=${characterId} fn=speakCharacterLine` +
     ` text="${text.slice(0, 80)}"`
   );
 
-  if (characterId !== 'valentine') return 0;
+  if (!SUPPORTED_CHARACTER_IDS.has(characterId)) return 0;
 
   const trimmed = text.trim();
   if (!trimmed) return 0;
 
-  // Stop any prior clip before we start a new request
-  stopValentineSpeech();
+  // Respect the global Sound On/Off setting: no audio when muted.
+  if (soundManager.isMuted()) {
+    console.log(`[Speech] skipped — muted characterId=${characterId}`);
+    return 0;
+  }
 
-  const cacheKey = normaliseCacheKey(trimmed);
+  // Stop any prior clip before we start a new request
+  stopCharacterSpeech();
+
+  const cacheKey = normaliseCacheKey(characterId, trimmed);
   const requestText = trimmed.slice(0, 120);
   let dataUrl = speechCache.get(cacheKey);
 
@@ -79,13 +98,16 @@ export async function speakCharacterLine(
       const resp = await fetch('/.netlify/functions/character-speech', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ characterId: 'valentine', text: requestText }),
+        body: JSON.stringify({ characterId, text: requestText }),
       });
       responseStatus = resp.status;
-      console.log(`[Speech] response status=${responseStatus}`);
+      console.log(`[Speech] response status=${responseStatus} characterId=${characterId}`);
 
       if (!resp.ok) {
-        console.warn(`[Speech] synthesis failed status=${responseStatus} text="${requestText.slice(0, 40)}"`);
+        console.warn(
+          `[Speech] synthesis failed status=${responseStatus} characterId=${characterId}` +
+          ` text="${requestText.slice(0, 40)}"`
+        );
         return 0;
       }
 
@@ -100,13 +122,15 @@ export async function speakCharacterLine(
       return 0;
     }
   } else {
-    console.log(`[Speech] cache hit text="${requestText.slice(0, 40)}"`);
+    console.log(`[Speech] cache hit characterId=${characterId} text="${requestText.slice(0, 40)}"`);
   }
+
+  soundManager.unlock();
 
   return new Promise<number>((resolve) => {
     const safeDataUrl = dataUrl!;
     const audio = new Audio(safeDataUrl);
-    audio.volume = Math.max(0, Math.min(1, volume));
+    audio.volume = soundManager.getVoiceOutputVolume();
     currentAudio = audio;
 
     audio.addEventListener(
@@ -120,7 +144,7 @@ export async function speakCharacterLine(
         audio
           .play()
           .then(() => {
-            console.log(`[Speech] playback started text="${requestText.slice(0, 40)}"`);
+            console.log(`[Speech] playback started characterId=${characterId} text="${requestText.slice(0, 40)}"`);
             resolve(Math.round(audio.duration * 1000));
           })
           .catch((err: unknown) => {

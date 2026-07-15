@@ -40,6 +40,10 @@ import {
   speakValentineLine,
   stopValentineSpeech,
 } from '../services/valentineSpeech';
+import {
+  speakCharacterLine,
+  stopCharacterSpeech,
+} from '../services/CharacterSpeechClient';
 import { soundManager } from '../services/SoundManager';
 import { characterAudio } from '../audio/CharacterAudioManager';
 import { mapGameEventToAudioCategory } from '../audio/characterAudioEvents';
@@ -83,6 +87,18 @@ const VALENTINE_THINKING_MESSAGES = [
 
 const VALENTINE_THINKING_NOTES_MESSAGE = 'This is taking longer because Valentine has notes.';
 const VALENTINE_THINKING_FAILURE_LINE = "Fine. I'll weaponize the silence.";
+
+/**
+ * Maps an in-game opponent id to the server-side character-speech voice id.
+ * Only opponents with a configured ElevenLabs voice appear here. Midlife Dave's
+ * in-game id is `midlifeDave`; the server voice key is `midlife-dave`.
+ */
+const OPPONENT_SPEECH_CHARACTER_ID: Partial<Record<OpponentId, string>> = {
+  midlifeDave: 'midlife-dave',
+};
+
+const OPPONENT_BUBBLE_MIN_MS = 5000;
+const OPPONENT_BUBBLE_TAIL_MS = 300;
 
 export class PlayScene extends Phaser.Scene {
   private ballId = 'orb';
@@ -290,8 +306,14 @@ export class PlayScene extends Phaser.Scene {
     this.setupKeyboard();
     this.setupMousePaddleInput();
 
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.stopValentineThinking());
-    this.events.once(Phaser.Scenes.Events.DESTROY, () => this.stopValentineThinking());
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.stopValentineThinking();
+      stopCharacterSpeech();
+    });
+    this.events.once(Phaser.Scenes.Events.DESTROY, () => {
+      this.stopValentineThinking();
+      stopCharacterSpeech();
+    });
 
     soundManager.unlock();
     this.input.once('pointerdown', () => {
@@ -301,7 +323,10 @@ export class PlayScene extends Phaser.Scene {
       }
     });
     soundManager.onMuteChange((muted) => {
-      if (muted) stopValentineSpeech();
+      if (muted) {
+        stopValentineSpeech();
+        stopCharacterSpeech();
+      }
     });
     uiManager.setSoundIndicator(!soundManager.isMuted());
     characterAudio.preload(this);
@@ -1785,6 +1810,41 @@ export class PlayScene extends Phaser.Scene {
   private showOpponentBarkUi(result: BarkResult): void {
     const layout = this.buildOpponentBarkLayoutInput();
     uiManager.showOpponentBark(result, layout);
+    this.speakOpponentBark(result);
+  }
+
+  /**
+   * Speak an opponent bark through the shared character-speech pipeline.
+   * Each bark is fired exactly once via onShowBark, so a bark speaks once per
+   * event. Speech never blocks gameplay: the bubble is already shown, and on
+   * success we re-time it to max(5000ms, audio duration + 300ms).
+   */
+  private speakOpponentBark(result: BarkResult): void {
+    const voiceCharacterId = OPPONENT_SPEECH_CHARACTER_ID[this.opponentId];
+    if (!voiceCharacterId) return;
+
+    void speakCharacterLine(
+      voiceCharacterId,
+      result.text,
+      `opponentBark:${result.situation}`
+    )
+      .then((durationMs) => {
+        if (durationMs <= 0) return;
+        const bubbleMs = Math.max(
+          OPPONENT_BUBBLE_MIN_MS,
+          durationMs + OPPONENT_BUBBLE_TAIL_MS
+        );
+        uiManager.setOpponentBarkDisplayDuration(bubbleMs, result.text);
+      })
+      .catch((error: unknown) => {
+        if (import.meta.env.DEV) {
+          console.warn('[OpponentSpeech] speech failed; bubble stays, match continues', {
+            opponentId: this.opponentId,
+            situation: result.situation,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
   }
 
   private buildOpponentBarkLayoutInput() {

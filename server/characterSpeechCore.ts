@@ -1,12 +1,15 @@
 import {
   getElevenLabsEnvDiagnostics,
+  getCharacterVoiceEnvVar,
+  getCharacterVoiceId,
   parseElevenLabsErrorCode,
   extractProviderErrorFields,
   ProviderError,
+  VOICE_ENV_BY_CHARACTER,
 } from './speechDiagnostics';
 
 const MAX_SPEECH_TEXT = 320;
-const ALLOWED_CHARACTER_IDS = new Set(['valentine']);
+const ALLOWED_CHARACTER_IDS = new Set(Object.keys(VOICE_ENV_BY_CHARACTER));
 
 const audioCache = new Map<string, { audioBase64: string; mimeType: 'audio/mpeg' }>();
 
@@ -23,10 +26,11 @@ function logDev(message: string, details?: Record<string, unknown>): void {
   console.log(`[character-speech] ${message}`);
 }
 
-function missingEnvVars(): string[] {
+function missingEnvVars(characterId: string): string[] {
   const missing: string[] = [];
   if (!process.env.ELEVENLABS_API_KEY) missing.push('ELEVENLABS_API_KEY');
-  if (!process.env.ELEVENLABS_VOICE_VALENTINE) missing.push('ELEVENLABS_VOICE_VALENTINE');
+  const voiceEnvVar = getCharacterVoiceEnvVar(characterId);
+  if (voiceEnvVar && !process.env[voiceEnvVar]) missing.push(voiceEnvVar);
   return missing;
 }
 
@@ -71,7 +75,13 @@ export function parseCharacterSpeechRequest(body: unknown): CharacterSpeechReque
   return { characterId, text };
 }
 
-async function synthesizeSpeech(text: string, voiceId: string, modelId: string, apiKey: string): Promise<Buffer> {
+async function synthesizeSpeech(
+  characterId: string,
+  text: string,
+  voiceId: string,
+  modelId: string,
+  apiKey: string
+): Promise<Buffer> {
   const url = `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`;
 
   const response = await fetch(url, {
@@ -103,7 +113,7 @@ async function synthesizeSpeech(text: string, voiceId: string, modelId: string, 
       statusCode: response.status,
       body: errorBody.slice(0, 500),
       providerCode,
-      ...getElevenLabsEnvDiagnostics(),
+      ...getElevenLabsEnvDiagnostics(characterId),
     });
     throw new ProviderError('ElevenLabs', response.status, providerCode);
   }
@@ -122,17 +132,17 @@ export async function handleCharacterSpeechRequest(
     text: request.text,
   });
 
-  const missing = missingEnvVars();
+  const missing = missingEnvVars(request.characterId);
   if (missing.length > 0) {
     console.error('[character-speech] missing environment variables', {
       missing,
-      ...getElevenLabsEnvDiagnostics(),
+      ...getElevenLabsEnvDiagnostics(request.characterId),
     });
     return { ok: false, error: 'Speech synthesis unavailable', text: request.text };
   }
 
   const apiKey = process.env.ELEVENLABS_API_KEY!;
-  const voiceId = process.env.ELEVENLABS_VOICE_VALENTINE!;
+  const voiceId = getCharacterVoiceId(request.characterId)!;
   const modelId = process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5';
   const cacheKey = getCacheKey(request.characterId, request.text, modelId, voiceId);
   const cached = audioCache.get(cacheKey);
@@ -150,7 +160,7 @@ export async function handleCharacterSpeechRequest(
   }
 
   try {
-    const audioBuffer = await synthesizeSpeech(request.text, voiceId, modelId, apiKey);
+    const audioBuffer = await synthesizeSpeech(request.characterId, request.text, voiceId, modelId, apiKey);
     const audioBase64 = audioBuffer.toString('base64');
     audioCache.set(cacheKey, { audioBase64, mimeType: 'audio/mpeg' });
     logDev('returning synthesized audio', { audioBytes: audioBuffer.length });
@@ -168,7 +178,7 @@ export async function handleCharacterSpeechRequest(
       message,
       providerStatus,
       providerCode,
-      ...getElevenLabsEnvDiagnostics(),
+      ...getElevenLabsEnvDiagnostics(request.characterId),
     });
     return {
       ok: false,

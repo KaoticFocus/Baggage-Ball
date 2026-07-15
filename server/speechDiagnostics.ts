@@ -6,17 +6,47 @@
  * exposing the API key value or the full voice ID.
  */
 
+/**
+ * Server-side voice mapping. Maps each supported character id to the *name* of
+ * the environment variable that holds its ElevenLabs voice id. The voice id
+ * value itself is never exposed to browser code or logs.
+ */
+export const VOICE_ENV_BY_CHARACTER: Record<string, string> = {
+  valentine: 'ELEVENLABS_VOICE_VALENTINE',
+  'midlife-dave': 'ELEVENLABS_VOICE_MIDLIFE_DAVE',
+};
+
+/** Name of the env var holding the voice id for a character (if supported). */
+export function getCharacterVoiceEnvVar(characterId: string): string | undefined {
+  return VOICE_ENV_BY_CHARACTER[characterId];
+}
+
+/** Resolve a character's ElevenLabs voice id value from the environment. */
+export function getCharacterVoiceId(characterId: string): string | undefined {
+  const envVar = VOICE_ENV_BY_CHARACTER[characterId];
+  return envVar ? process.env[envVar] : undefined;
+}
+
 export type ElevenLabsEnvDiagnostics = {
+  characterId?: string;
   hasApiKey: boolean;
   hasVoiceId: boolean;
   modelId: string;
 };
 
-/** Safe env snapshot for ElevenLabs — booleans + non-secret model id only. */
-export function getElevenLabsEnvDiagnostics(): ElevenLabsEnvDiagnostics {
+/**
+ * Safe env snapshot for ElevenLabs — booleans + non-secret model id only.
+ * When a characterId is supplied, hasVoiceId reflects that character's voice
+ * env var; otherwise it falls back to Valentine's for backward compatibility.
+ */
+export function getElevenLabsEnvDiagnostics(characterId?: string): ElevenLabsEnvDiagnostics {
+  const voiceEnvVar = characterId
+    ? VOICE_ENV_BY_CHARACTER[characterId]
+    : 'ELEVENLABS_VOICE_VALENTINE';
   return {
+    ...(characterId ? { characterId } : {}),
     hasApiKey: Boolean(process.env.ELEVENLABS_API_KEY),
-    hasVoiceId: Boolean(process.env.ELEVENLABS_VOICE_VALENTINE),
+    hasVoiceId: Boolean(voiceEnvVar && process.env[voiceEnvVar]),
     modelId: process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5',
   };
 }

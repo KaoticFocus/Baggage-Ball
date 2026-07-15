@@ -866,6 +866,31 @@ export class UIManager {
     this.opponentBarkTimer = setTimeout(() => this.hideOpponentBark(), OPPONENT_BARK_DISPLAY_MS);
   }
 
+  /**
+   * Re-time the opponent bark bubble once audio duration is known so it honours
+   * max(5000ms, audio duration + 300ms). Ignored if the bubble is hidden or if
+   * a different bark is now showing (guarded by the expected text).
+   */
+  setOpponentBarkDisplayDuration(displayMs: number, expectedText?: string): void {
+    if (this.opponentBarkBubble.classList.contains('hidden')) return;
+
+    if (expectedText !== undefined) {
+      const currentText = document.getElementById('opponent-bark-text')?.textContent ?? '';
+      if (currentText !== truncateHoverText(expectedText, 120)) return;
+    }
+
+    if (this.opponentBarkTimer) clearTimeout(this.opponentBarkTimer);
+    if (this.opponentBarkFadeTimer) clearTimeout(this.opponentBarkFadeTimer);
+    this.opponentBarkBubble.classList.remove('opponent-bark-fading');
+    this.opponentBarkBubble.style.opacity = '';
+
+    this.opponentBarkFadeTimer = setTimeout(() => {
+      this.opponentBarkBubble.classList.add('opponent-bark-fading');
+    }, Math.max(0, displayMs - OPPONENT_BARK_FADE_MS));
+
+    this.opponentBarkTimer = setTimeout(() => this.hideOpponentBark(), displayMs);
+  }
+
   updateOpponentBarkPosition(layoutInput: OpponentBarkLayoutInput): void {
     if (this.opponentBarkBubble.classList.contains('hidden')) return;
     const visible = this.positionOpponentBark(layoutInput, false);
