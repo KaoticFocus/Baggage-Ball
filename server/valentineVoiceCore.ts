@@ -1,4 +1,8 @@
 import OpenAI from 'openai';
+import {
+  getOpenAiEnvDiagnostics,
+  extractProviderErrorFields,
+} from './speechDiagnostics';
 
 export const VALENTINE_VOICE_LIMITS = {
   MAX_PLAYER_TEXT: 280,
@@ -40,6 +44,8 @@ export type ValentineVoiceFailure = {
   ok: false;
   error: string;
   text?: string;
+  providerStatus?: number;
+  providerCode?: string;
 };
 
 export type ValentineVoiceResponse = ValentineVoiceSuccess | ValentineVoiceFailure;
@@ -269,7 +275,10 @@ export async function handleValentineVoiceRequest(
 
   const missing = missingEnvVars();
   if (missing.length > 0) {
-    console.error('[valentine-voice] missing environment variables', { missing });
+    console.error('[valentine-voice] missing environment variables', {
+      missing,
+      ...getOpenAiEnvDiagnostics(),
+    });
     return { ok: false, error: 'Voice generation unavailable' };
   }
 
@@ -291,7 +300,18 @@ export async function handleValentineVoiceRequest(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Voice generation unavailable';
-    console.error('[valentine-voice] generation failed', { message });
-    return { ok: false, error: 'Voice generation unavailable' };
+    const { providerStatus, providerCode } = extractProviderErrorFields(error);
+    console.error('[valentine-voice] generation failed', {
+      message,
+      providerStatus,
+      providerCode,
+      ...getOpenAiEnvDiagnostics(),
+    });
+    return {
+      ok: false,
+      error: 'Voice generation unavailable',
+      ...(providerStatus !== undefined ? { providerStatus } : {}),
+      ...(providerCode !== undefined ? { providerCode } : {}),
+    };
   }
 }

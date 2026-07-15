@@ -1,3 +1,10 @@
+import {
+  getElevenLabsEnvDiagnostics,
+  parseElevenLabsErrorCode,
+  extractProviderErrorFields,
+  ProviderError,
+} from './speechDiagnostics';
+
 const MAX_SPEECH_TEXT = 320;
 const ALLOWED_CHARACTER_IDS = new Set(['valentine']);
 
@@ -48,6 +55,8 @@ export type CharacterSpeechFailure = {
   ok: false;
   error: string;
   text?: string;
+  providerStatus?: number;
+  providerCode?: string;
 };
 
 export type CharacterSpeechResponse = CharacterSpeechSuccess | CharacterSpeechFailure;
@@ -88,11 +97,15 @@ async function synthesizeSpeech(text: string, voiceId: string, modelId: string, 
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '');
+    const providerCode = parseElevenLabsErrorCode(errorBody);
+    // console.error so it always reaches the Netlify Function logs (never dev-gated).
     console.error('[character-speech] ElevenLabs synthesis failed', {
       statusCode: response.status,
-      body: errorBody.slice(0, 300),
+      body: errorBody.slice(0, 500),
+      providerCode,
+      ...getElevenLabsEnvDiagnostics(),
     });
-    throw new Error(`ElevenLabs synthesis failed (${response.status})`);
+    throw new ProviderError('ElevenLabs', response.status, providerCode);
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
@@ -111,7 +124,10 @@ export async function handleCharacterSpeechRequest(
 
   const missing = missingEnvVars();
   if (missing.length > 0) {
-    console.error('[character-speech] missing environment variables', { missing });
+    console.error('[character-speech] missing environment variables', {
+      missing,
+      ...getElevenLabsEnvDiagnostics(),
+    });
     return { ok: false, error: 'Speech synthesis unavailable', text: request.text };
   }
 
@@ -147,7 +163,19 @@ export async function handleCharacterSpeechRequest(
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Speech synthesis unavailable';
-    console.error('[character-speech] synthesis failed', { message, text: request.text });
-    return { ok: false, error: 'Speech synthesis unavailable', text: request.text };
+    const { providerStatus, providerCode } = extractProviderErrorFields(error);
+    console.error('[character-speech] synthesis failed', {
+      message,
+      providerStatus,
+      providerCode,
+      ...getElevenLabsEnvDiagnostics(),
+    });
+    return {
+      ok: false,
+      error: 'Speech synthesis unavailable',
+      text: request.text,
+      ...(providerStatus !== undefined ? { providerStatus } : {}),
+      ...(providerCode !== undefined ? { providerCode } : {}),
+    };
   }
 }
