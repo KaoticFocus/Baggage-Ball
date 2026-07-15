@@ -72,6 +72,7 @@ export class UIManager {
   private onPauseToggle?: () => void;
   private onQuit?: () => void;
   private statsPanel = document.getElementById('stats-panel')!;
+  private emotionalInventory = document.getElementById('emotional-inventory')!;
   private hudControlsEl = document.querySelector('.hud-controls') as HTMLElement;
   private pauseBtn = document.getElementById('hud-pause-btn') as HTMLButtonElement;
   private pauseBanner = document.getElementById('pause-banner')!;
@@ -469,6 +470,7 @@ export class UIManager {
     this.renderOpponentSelect();
     this.menuOverlay.classList.remove('hidden');
     this.hud.classList.add('hidden');
+    this.hideEmotionalInventory();
     this.dialogueOverlay.classList.add('hidden');
     this.recapOverlay.classList.add('hidden');
     this.hideMatchOverlays();
@@ -482,6 +484,7 @@ export class UIManager {
     this.menuOverlay.classList.add('hidden');
     this.recapOverlay.classList.add('hidden');
     this.hud.classList.remove('hidden');
+    this.showEmotionalInventory();
     this.hideMatchOverlays();
     this.resetGameControls();
     document.getElementById('stats-ball-name')!.textContent = ballName;
@@ -719,8 +722,7 @@ export class UIManager {
   }
 
   private renderEmotionalInventory(): void {
-    const inventory = document.getElementById('emotional-inventory');
-    if (!inventory) return;
+    const inventory = this.emotionalInventory;
     inventory.innerHTML = EMOTIONAL_RESPONSE_MODES.map((mode) => `
       <button type="button" class="emotional-slot${mode.id === this.selectedEmotionalResponseModeId ? ' emotional-slot-selected' : ''}" data-mode-id="${mode.id}" title="${mode.description}">
         <span class="emotional-slot-key">${mode.key}</span><span class="emotional-slot-label">${mode.label}</span>
@@ -732,6 +734,52 @@ export class UIManager {
         if (modeId) this.selectEmotionalResponseMode(modeId);
       });
     });
+  }
+
+  private logEmotionalInventoryLayout(): void {
+    if (!import.meta.env.DEV) return;
+
+    const rect = this.emotionalInventory.getBoundingClientRect();
+    const computed = window.getComputedStyle(this.emotionalInventory);
+    const ancestors: Array<{ element: string; overflow: string; display: string }> = [];
+    let parent = this.emotionalInventory.parentElement;
+    while (parent) {
+      const parentStyle = window.getComputedStyle(parent);
+      ancestors.push({
+        element: parent.id ? `#${parent.id}` : parent.tagName.toLowerCase(),
+        overflow: parentStyle.overflow,
+        display: parentStyle.display,
+      });
+      parent = parent.parentElement;
+    }
+
+    console.log('[Emotional Inventory] HUD mounted', {
+      boundingClientRect: {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        width: rect.width,
+        height: rect.height,
+      },
+      className: this.emotionalInventory.className,
+      computedDisplay: computed.display,
+      computedVisibility: computed.visibility,
+      computedZIndex: computed.zIndex,
+      belowViewport: rect.top >= window.innerHeight || rect.bottom <= 0,
+      clippedAncestors: ancestors.filter(({ overflow }) => overflow === 'hidden' || overflow === 'clip'),
+      ancestors,
+    });
+  }
+
+  private showEmotionalInventory(): void {
+    this.emotionalInventory.classList.remove('hidden');
+    this.emotionalInventory.classList.toggle('emotional-inventory-dev-probe', import.meta.env.DEV);
+    requestAnimationFrame(() => this.logEmotionalInventoryLayout());
+  }
+
+  private hideEmotionalInventory(): void {
+    this.emotionalInventory.classList.add('hidden');
   }
 
   showDialogue(
@@ -1025,6 +1073,7 @@ export class UIManager {
     }
   ): void {
     this.hud.classList.add('hidden');
+    this.hideEmotionalInventory();
     this.dialogueOverlay.classList.add('hidden');
     this.recapOverlay.classList.remove('hidden');
     this.hideMatchOverlays();

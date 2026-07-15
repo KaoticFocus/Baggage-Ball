@@ -20,6 +20,7 @@ body {
 #game-container {
   position: relative;
   z-index: 1;
+  margin-bottom: 64px;
 }
 
 #game-container canvas {
@@ -32,6 +33,10 @@ body {
   inset: 0;
   z-index: 10;
   pointer-events: none;
+}
+
+#dialogue-overlay {
+  z-index: 30;
 }
 
 .overlay.hidden {
@@ -565,13 +570,19 @@ body {
   transform: translateX(-50%);
   display: flex;
   gap: 0.25rem;
-  width: min(760px, calc(100vw - 24px));
+  width: min(820px, calc(100vw - 24px));
   padding: 0.35rem;
   background: rgba(8, 10, 20, 0.94);
   border: 1px solid #2a2a4a;
   border-radius: 6px;
   box-shadow: 0 0 18px rgba(0, 229, 255, 0.12);
-  z-index: 12;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  z-index: 15;
+  pointer-events: auto;
+  clip: auto;
+  clip-path: none;
 }
 
 .emotional-slot {
@@ -591,6 +602,11 @@ body {
   cursor: pointer;
   white-space: nowrap;
   transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.emotional-inventory-dev-probe {
+  outline: 2px dashed #ffcc00;
+  outline-offset: 3px;
 }
 
 .emotional-slot:hover,
@@ -1126,6 +1142,7 @@ body {
   }
 
   .emotional-slot {
+    flex: 0 0 78px;
     flex-direction: column;
     gap: 0.1rem;
     padding: 0.25rem 0.1rem;
