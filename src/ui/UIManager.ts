@@ -523,6 +523,7 @@ export class UIManager {
     this.ballCommentText.textContent = text;
     this.applyBallCommentTheme();
     this.ballComment.classList.remove('hidden');
+    this.ballComment.classList.remove('ball-comment--thinking');
     this.lastBallCommentScreen = ballScreen ?? null;
     this.repositionBallComment();
     if (this.ballCommentTimer) clearTimeout(this.ballCommentTimer);
@@ -657,6 +658,7 @@ export class UIManager {
 
   hideBallComment(): void {
     this.ballComment.classList.add('hidden');
+    this.ballComment.classList.remove('ball-comment--thinking');
     if (this.ballCommentTimer) {
       clearTimeout(this.ballCommentTimer);
       this.ballCommentTimer = null;
@@ -750,13 +752,32 @@ export class UIManager {
     submitBtn.disabled = false;
   }
 
-  showValentineThinking(ballScreen?: { x: number; y: number }): void {
+  showValentineThinking(message = 'Valentine is thinking', ballScreen?: { x: number; y: number }): void {
     this.ballCommentSpeaker.textContent = 'VALENTINE';
-    this.ballCommentText.textContent = 'Valentine is thinking…';
+    this.ballCommentText.textContent = this.stripTrailingEllipsis(message);
     this.applyBallCommentTheme();
     this.ballComment.classList.remove('hidden');
+    this.ballComment.classList.add('ball-comment--thinking');
+    if (this.ballCommentTimer) {
+      clearTimeout(this.ballCommentTimer);
+      this.ballCommentTimer = null;
+    }
     this.lastBallCommentScreen = ballScreen ?? null;
     this.repositionBallComment();
+  }
+
+  setValentineThinkingMessage(message: string): void {
+    if (this.ballComment.classList.contains('hidden')) return;
+    this.ballCommentText.textContent = this.stripTrailingEllipsis(message);
+    this.repositionBallComment();
+  }
+
+  clearValentineThinking(): void {
+    this.ballComment.classList.remove('ball-comment--thinking');
+  }
+
+  private stripTrailingEllipsis(message: string): string {
+    return message.replace(/[.\u2026]+\s*$/, '').trimEnd();
   }
 
   showValentineHoverResult(emotionalResult: string, playerEcho?: string): void {

@@ -646,6 +646,46 @@ body {
   margin-top: -1px;
 }
 
+.ball-comment--thinking .ball-comment-body {
+  animation: ballCommentThinkingPulse 1.6s ease-in-out infinite;
+}
+
+.ball-comment--thinking .ball-comment-text::after {
+  content: '';
+  animation: ballCommentThinkingDots 1.4s steps(1, end) infinite;
+}
+
+@keyframes ballCommentThinkingPulse {
+  0%,
+  100% {
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.42),
+      0 0 12px var(--ball-comment-glow, rgba(170, 102, 255, 0.22)),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  }
+  50% {
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.42),
+      0 0 30px var(--ball-comment-accent, #aa66ff),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.09);
+  }
+}
+
+@keyframes ballCommentThinkingDots {
+  0% {
+    content: '';
+  }
+  25% {
+    content: '.';
+  }
+  50% {
+    content: '..';
+  }
+  75% {
+    content: '...';
+  }
+}
+
 .ball-comment.ball-comment--below {
   flex-direction: column-reverse;
 }

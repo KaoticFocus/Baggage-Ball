@@ -22,7 +22,12 @@ import {
 import { getEmotionalResult } from '../systems/EmotionalResultSystem';
 import { MatchSystem } from '../systems/MatchSystem';
 import { buildMatchRecap, getOpponentShortName } from '../systems/MatchRecapSystem';
-import { getBallOpeningLineCue, getBallPointReactionCue, type BallLineCue } from '../data/ballOpeningLines';
+import {
+  getBallOpeningLineCue,
+  getBallPointReactionCue,
+  getValentinePlayerMissCue,
+  type BallLineCue,
+} from '../data/ballOpeningLines';
 import { classifyPlayerResponse } from '../services/classifyResponseClient';
 import {
   canRequestValentineVoice,
@@ -39,7 +44,6 @@ import { soundManager } from '../services/SoundManager';
 import { characterAudio } from '../audio/CharacterAudioManager';
 import { mapGameEventToAudioCategory } from '../audio/characterAudioEvents';
 import type { CharacterAudioResult } from '../audio/characterAudioTypes';
-import { speakCharacterLine } from '../services/CharacterSpeechClient';
 import type { HoverDecision } from '../types/DialogueTypes';
 import type { DialogueEvent } from '../types/DialogueTypes';
 import type { DialogueResponse } from '../types/DialogueTypes';
@@ -64,6 +68,21 @@ import type { ScreenBounds } from '../../ui/dialogueBubbleLayout';
 import { isTypingInFormField } from '../../ui/formInput';
 
 type GameState = 'intro' | 'countdown' | 'playing' | 'hover' | 'pointBreak' | 'matchEnd';
+
+/** Rotating in-character messages shown while Valentine's line is generating. */
+const VALENTINE_THINKING_MESSAGES = [
+  'Valentine is choosing which wound to reopen…',
+  'Valentine is rewriting this as betrayal…',
+  'Valentine is preparing an emotionally disproportionate response…',
+  'Valentine is checking whether Orb would treat her better…',
+  'Valentine is turning one missed ball into a relationship pattern…',
+  'Valentine is drafting a monologue you did not ask for…',
+  'Valentine is consulting her list of grievances…',
+  'Valentine is deciding how personally to take this…',
+];
+
+const VALENTINE_THINKING_NOTES_MESSAGE = 'This is taking longer because Valentine has notes.';
+const VALENTINE_THINKING_FAILURE_LINE = "Fine. I'll weaponize the silence.";
 
 export class PlayScene extends Phaser.Scene {
   private ballId = 'orb';
@@ -129,6 +148,16 @@ export class PlayScene extends Phaser.Scene {
   private valentineOutburstCooldownUntil = 0;
   private valentineOutburstInFlight = false;
   private lastValentineOutburstModifier: BehaviorModifier | null = null;
+  private lastSpokenDialogueKey: string | null = null;
+  private valentineThinkingRotationTimer: number | null = null;
+  private valentineThinkingNotesTimer: number | null = null;
+  private valentineThinkingStartedAt = 0;
+  private lastValentineThinkingMessage = '';
+  private readonly VALENTINE_THINKING_MIN_MS = 1200;
+  private readonly VALENTINE_THINKING_MAX_MS = 10000;
+  private readonly VALENTINE_THINKING_NOTES_MS = 7000;
+  private readonly VALENTINE_THINKING_ROTATE_MIN_MS = 1500;
+  private readonly VALENTINE_THINKING_ROTATE_MAX_MS = 2000;
 
   constructor() {
     super({ key: 'PlayScene' });
@@ -260,6 +289,9 @@ export class PlayScene extends Phaser.Scene {
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.setupKeyboard();
     this.setupMousePaddleInput();
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.stopValentineThinking());
+    this.events.once(Phaser.Scenes.Events.DESTROY, () => this.stopValentineThinking());
 
     soundManager.unlock();
     this.input.once('pointerdown', () => {
@@ -555,8 +587,6 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('opponentMisses');
       uiManager.showPointFlash('You scored.');
       const pointReaction = getBallPointReactionCue(this.ballId, true);
-      const pointDuration = this.ballId === 'valentine' ? 5000 : 1400;
-      uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
       if (this.ballId === 'valentine') {
         void speakValentineLine(pointReaction.text, {
           eventType: 'scoreReaction',
@@ -565,22 +595,7 @@ export class PlayScene extends Phaser.Scene {
           waitForPlayback: false,
         });
       } else {
-      const pointDuration = this.ballId === 'valentine' ? 5000 : 1400;
-      uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
-      if (this.ballId === 'valentine') {
-        const t0 = Date.now();
-        void speakCharacterLine('valentine', pointReaction.text, 'scoreReaction:playerScored')
-          .then((audioDurationMs) => {
-            if (audioDurationMs > 0) {
-              const elapsed = Date.now() - t0;
-              uiManager.extendBallComment(t0 + Math.max(5000, elapsed + audioDurationMs + 300));
-            }
-          });
-      } else {
-<<<<<<< HEAD
->>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
-=======
->>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
+        uiManager.showBallComment(pointReaction.text, 1400, this.getBallScreenPosition());
         this.playBallLineAudio(pointReaction, 'playerScored');
       }
       soundManager.playPlayerScore();
@@ -589,25 +604,17 @@ export class PlayScene extends Phaser.Scene {
       this.fireOpponentBark('playerMisses');
       this.fireOpponentBark('opponentScores');
       uiManager.showPointFlash(`${opponentShort} scored.`);
-      const pointReaction = getBallPointReactionCue(this.ballId, false);
-        this.playBallLineAudio(pointReaction, 'playerScored');
-      }
-      const pointDuration = this.ballId === 'valentine' ? 5000 : this.POST_MISS_COMMENT_MS;
-      uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
       if (this.ballId === 'valentine') {
-        const t0 = Date.now();
-        void speakCharacterLine('valentine', pointReaction.text, 'scoreReaction:opponentScored')
-          .then((audioDurationMs) => {
-            if (audioDurationMs > 0) {
-              const elapsed = Date.now() - t0;
-              uiManager.extendBallComment(t0 + Math.max(5000, elapsed + audioDurationMs + 300));
-            }
-          });
+        const missCue = getValentinePlayerMissCue();
+        void speakValentineLine(missCue.text, {
+          eventType: 'missReaction',
+          priority: 'medium',
+          ballScreen: this.getBallScreenPosition(),
+          waitForPlayback: false,
+        });
       } else {
-<<<<<<< HEAD
->>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
-=======
->>>>>>> d46247a8400d3d79486a991de4467a53ff902f03
+        const pointReaction = getBallPointReactionCue(this.ballId, false);
+        uiManager.showBallComment(pointReaction.text, this.POST_MISS_COMMENT_MS, this.getBallScreenPosition());
         this.playBallLineAudio(pointReaction, 'opponentScored');
       }
       soundManager.playOpponentScore();
@@ -798,6 +805,43 @@ export class PlayScene extends Phaser.Scene {
     characterAudio.playCue(this, this.ballId, event.audioCueId, {
       priority: mapping?.priority ?? 'high',
       interrupt: 'same-or-lower',
+    });
+  }
+
+  private buildDialogueSpeechKey(eventId: string, line: string): string {
+    const normalizedLine = line.trim().toLowerCase().replace(/\s+/g, ' ');
+    return `${eventId}::${normalizedLine}`;
+  }
+
+  /**
+   * Speak Valentine's hover prompt exactly once per dialogue event.
+   * Guarded by a stable event-id + line key so UI re-renders, response
+   * buttons, custom input, and stat updates never replay the prompt.
+   */
+  private speakValentineDialogueLine(event: DialogueEvent): void {
+    const dialogueKey = this.buildDialogueSpeechKey(event.id, event.ballLine);
+
+    if (this.lastSpokenDialogueKey === dialogueKey) {
+      if (import.meta.env.DEV) {
+        console.log('[ValentineSpeech] duplicate suppressed', { dialogueKey });
+      }
+      return;
+    }
+
+    this.lastSpokenDialogueKey = dialogueKey;
+
+    if (import.meta.env.DEV) {
+      console.log('[ValentineSpeech] speech requested', {
+        dialogueKey,
+        text: event.ballLine,
+      });
+    }
+
+    void speakValentineLine(event.ballLine, {
+      eventType: mapDialogueSituationToSpeechEvent(event.situation),
+      priority: 'medium',
+      ballScreen: this.getBallScreenPosition(),
+      waitForPlayback: false,
     });
   }
 
@@ -1263,12 +1307,7 @@ export class PlayScene extends Phaser.Scene {
     this.playDialogueEventAudio(event);
 
     if (this.ballId === 'valentine') {
-      void speakValentineLine(event.ballLine, {
-        eventType: mapDialogueSituationToSpeechEvent(event.situation),
-        priority: 'medium',
-        ballScreen: this.getBallScreenPosition(),
-        waitForPlayback: false,
-      });
+      this.speakValentineDialogueLine(event);
     }
 
     this.storedVelocity.x = this.ballBody.velocity.x;
@@ -1305,11 +1344,6 @@ export class PlayScene extends Phaser.Scene {
       this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId),
       bounds
     );
-
-    // Speak Valentine's opening hover line — fires async, bubble stays until player responds
-    if (this.ballId === 'valentine') {
-      void speakCharacterLine('valentine', event.ballLine, `hover:${event.situation}`);
-    }
   }
 
   private selectResponse(index: number): void {
@@ -1356,7 +1390,7 @@ export class PlayScene extends Phaser.Scene {
     if (this.gameState !== 'hover' || !this.currentEvent) return;
 
     uiManager.showCustomInputProcessing();
-    uiManager.showValentineThinking(this.getBallScreenPosition());
+    this.startValentineThinking();
 
     const voicePayload = {
       eventType: 'typedResponse' as const,
@@ -1365,14 +1399,38 @@ export class PlayScene extends Phaser.Scene {
       recentLines: this.valentineRecentLines,
     };
 
-    const [classifyResult, voiceResult] = await Promise.all([
-      classifyPlayerResponse({
-        playerText: text,
-        ballId: this.ballId,
-        situation: this.currentEvent.situation,
-      }),
-      requestValentineVoice(voicePayload),
-    ]);
+    const generated = await this.awaitValentineGeneration(
+      Promise.all([
+        classifyPlayerResponse({
+          playerText: text,
+          ballId: this.ballId,
+          situation: this.currentEvent.situation,
+        }),
+        requestValentineVoice(voicePayload),
+      ])
+    );
+
+    await this.ensureMinThinkingTime();
+    this.stopValentineThinking();
+
+    if (!generated) {
+      if (import.meta.env.DEV) {
+        console.warn('[ValentineThinking] generation exceeded max wait; using fallback line');
+      }
+      const failScreen = this.getBallScreenPosition();
+      uiManager.showValentineHoverResult('Valentine went quiet.', text);
+      await speakValentineLine(VALENTINE_THINKING_FAILURE_LINE, {
+        eventType: 'typedResponse',
+        priority: 'high',
+        ballScreen: failScreen,
+        waitForPlayback: true,
+      });
+      this.recordValentineLine(VALENTINE_THINKING_FAILURE_LINE);
+      this.resumeFromHover();
+      return;
+    }
+
+    const [classifyResult, voiceResult] = generated;
 
     this.personality.updateStats(classifyResult.statChanges);
     this.behaviorMod.setModifier(this.normalizeModifier(classifyResult.behaviorModifier));
@@ -1400,7 +1458,9 @@ export class PlayScene extends Phaser.Scene {
     const ballScreen = this.getBallScreenPosition();
     uiManager.showValentineHoverResult(emotionalResult, text);
 
-    const speechResult = await speakValentineLine(voiceResult.text, {
+    const spokenLine = voiceResult.ok ? voiceResult.text : VALENTINE_THINKING_FAILURE_LINE;
+
+    const speechResult = await speakValentineLine(spokenLine, {
       eventType: 'typedResponse',
       priority: 'high',
       ballScreen,
@@ -1439,6 +1499,81 @@ export class PlayScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Begin Valentine's "thinking" beat: a pulsing bubble that rotates through
+   * in-character messages while her line is generated. Timers are cleaned up by
+   * stopValentineThinking (called on speech begin, failure, quit, or shutdown).
+   */
+  private startValentineThinking(): void {
+    this.stopValentineThinking();
+    this.valentineThinkingStartedAt = Date.now();
+
+    const first =
+      VALENTINE_THINKING_MESSAGES[Math.floor(Math.random() * VALENTINE_THINKING_MESSAGES.length)];
+    this.lastValentineThinkingMessage = first;
+    uiManager.showValentineThinking(first, this.getBallScreenPosition());
+
+    this.scheduleValentineThinkingRotation();
+
+    this.valentineThinkingNotesTimer = window.setTimeout(() => {
+      uiManager.setValentineThinkingMessage(VALENTINE_THINKING_NOTES_MESSAGE);
+      if (this.valentineThinkingRotationTimer !== null) {
+        window.clearTimeout(this.valentineThinkingRotationTimer);
+        this.valentineThinkingRotationTimer = null;
+      }
+    }, this.VALENTINE_THINKING_NOTES_MS);
+  }
+
+  private scheduleValentineThinkingRotation(): void {
+    const interval =
+      this.VALENTINE_THINKING_ROTATE_MIN_MS +
+      Math.random() * (this.VALENTINE_THINKING_ROTATE_MAX_MS - this.VALENTINE_THINKING_ROTATE_MIN_MS);
+    this.valentineThinkingRotationTimer = window.setTimeout(() => {
+      this.rotateValentineThinkingMessage();
+      this.scheduleValentineThinkingRotation();
+    }, interval);
+  }
+
+  private rotateValentineThinkingMessage(): void {
+    let next = this.lastValentineThinkingMessage;
+    if (VALENTINE_THINKING_MESSAGES.length > 1) {
+      while (next === this.lastValentineThinkingMessage) {
+        next =
+          VALENTINE_THINKING_MESSAGES[Math.floor(Math.random() * VALENTINE_THINKING_MESSAGES.length)];
+      }
+    }
+    this.lastValentineThinkingMessage = next;
+    uiManager.setValentineThinkingMessage(next);
+  }
+
+  private stopValentineThinking(): void {
+    if (this.valentineThinkingRotationTimer !== null) {
+      window.clearTimeout(this.valentineThinkingRotationTimer);
+      this.valentineThinkingRotationTimer = null;
+    }
+    if (this.valentineThinkingNotesTimer !== null) {
+      window.clearTimeout(this.valentineThinkingNotesTimer);
+      this.valentineThinkingNotesTimer = null;
+    }
+    uiManager.clearValentineThinking();
+  }
+
+  /** Enforce the minimum visible thinking time (1200 ms). */
+  private async ensureMinThinkingTime(): Promise<void> {
+    const elapsed = Date.now() - this.valentineThinkingStartedAt;
+    const remaining = this.VALENTINE_THINKING_MIN_MS - elapsed;
+    if (remaining > 0) await this.waitRealMs(remaining);
+  }
+
+  /** Resolve the generation work, or null if it exceeds the max wait (10 s). */
+  private async awaitValentineGeneration<T>(work: Promise<T>): Promise<T | null> {
+    const result = await Promise.race([
+      work.then((value) => ({ value })),
+      this.waitRealMs(this.VALENTINE_THINKING_MAX_MS).then(() => null),
+    ]);
+    return result ? result.value : null;
+  }
+
   private async playValentineDynamicMoment(
     eventType: ValentineVoiceEventType,
     options?: {
@@ -1454,8 +1589,10 @@ export class PlayScene extends Phaser.Scene {
       recentLines: this.valentineRecentLines,
     };
 
-    uiManager.showValentineThinking(this.getBallScreenPosition());
-    const result = await requestValentineVoice(payload);
+    this.startValentineThinking();
+    const result = await this.awaitValentineGeneration(requestValentineVoice(payload));
+    await this.ensureMinThinkingTime();
+    this.stopValentineThinking();
 
     if (options?.showDialogueResult) {
       uiManager.showValentineHoverResult(
@@ -1464,7 +1601,9 @@ export class PlayScene extends Phaser.Scene {
       );
     }
 
-    const speechResult = await speakValentineLine(result.text, {
+    const spokenLine = result ? result.text : VALENTINE_THINKING_FAILURE_LINE;
+
+    const speechResult = await speakValentineLine(spokenLine, {
       eventType,
       priority: 'high',
       ballScreen: this.getBallScreenPosition(),
@@ -1529,39 +1668,54 @@ export class PlayScene extends Phaser.Scene {
       this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
     );
 
-    if (this.ballId === 'valentine') {
-      // Speak reaction; delay resume until max(5000 ms, audio duration + 300 ms)
-      const t0 = Date.now();
-      void speakCharacterLine('valentine', response.ballReaction, 'ballReaction')
-        .then((audioDurationMs) => {
-          const elapsed = Date.now() - t0;
-          const endTimeMs = t0 + Math.max(5000, elapsed + audioDurationMs + 300);
-          window.setTimeout(() => { this.resumeFromHover(); }, Math.max(0, endTimeMs - Date.now()));
-        })
-        .catch(() => {
-          window.setTimeout(() => { this.resumeFromHover(); }, 5000);
-        });
-    } else {
-      this.time.delayedCall(1500, () => {
-        this.resumeFromHover();
-      });
+    this.time.delayedCall(1500, () => {
+      this.resumeFromHover();
+    });
+  }
+
+  private async applyValentineResponse(response: DialogueResponse, playerEcho?: string): Promise<void> {
+    if (!this.currentEvent) return;
+
+    this.personality.updateStats(response.statChanges);
+    this.behaviorMod.setModifier(response.behaviorModifier);
+
+    if (response.behaviorModifier === 'gentleReturn') {
+      this.gentleNextHit = true;
     }
-      const pointDuration = this.ballId === 'valentine' ? 5000 : this.POST_MISS_COMMENT_MS;
-      uiManager.showBallComment(pointReaction.text, pointDuration, this.getBallScreenPosition());
-      if (this.ballId === 'valentine') {
-        void speakValentineLine(pointReaction.text, {
-          eventType: 'missReaction',
-          priority: 'medium',
-          ballScreen: this.getBallScreenPosition(),
-          waitForPlayback: false,
-        });
-      } else {
+
+    const ballName = this.personality.getPersonality().name;
+    const emotionalResult =
+      response.emotionalResult ??
+      getEmotionalResult(this.ballId, ballName, response.statChanges, response.tone);
+
+    this.recentEvents.push(`player: ${(playerEcho ?? response.text).slice(0, 50)}`);
+    uiManager.showReaction(response.ballReaction, emotionalResult, playerEcho);
+    uiManager.updateStats(this.personality.getStats());
+    uiManager.updateBallMeta(
+      this.currentHoverType,
+      this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+    );
+
+    await speakValentineLine(response.ballReaction, {
+      eventType: 'responseReaction',
+      priority: 'high',
+      ballScreen: this.getBallScreenPosition(),
+      waitForPlayback: true,
+    });
+
+    this.resumeFromHover();
   }
 
   private resumeFromHover(): void {
     this.gameState = 'playing';
     this.currentEvent = null;
     this.currentHoverType = '';
+    if (import.meta.env.DEV && this.lastSpokenDialogueKey) {
+      console.log('[ValentineSpeech] dialogue guard cleared', {
+        dialogueKey: this.lastSpokenDialogueKey,
+      });
+    }
+    this.lastSpokenDialogueKey = null;
     this.emotionDirector.markHoverResolved();
     this.opponentBarkSystem.setBallHoverActive(false);
     this.fireOpponentBark('ballHoverEnds', { allowDuringHover: true });
@@ -1739,6 +1893,7 @@ export class PlayScene extends Phaser.Scene {
 
   private quitToMenu(): void {
     this.fireOpponentBark('quitPressed');
+    this.stopValentineThinking();
 
     if (this.isPaused) {
       this.time.paused = false;
