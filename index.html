@@ -7,7 +7,10 @@
     <link rel="stylesheet" href="/src/ui/styles.css" />
   </head>
   <body>
-    <div id="game-container"></div>
+    <!-- Playfield shell: reserves bottom space for Emotional Inventory so FIT scale never pushes the canvas above the viewport. -->
+    <div id="app-shell">
+      <div id="game-container"></div>
+    </div>
 
     <!-- HUD overlay -->
     <div id="hud" class="overlay hidden">

@@ -6,26 +6,71 @@
   padding: 0;
 }
 
+:root {
+  --hud-top-inset: max(12px, env(safe-area-inset-top, 0px));
+  --inventory-reserve: 72px;
+}
+
 body {
   background: #050508;
   color: #e0e8ff;
   font-family: 'Share Tech Mono', monospace;
   overflow: hidden;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+}
+
+/*
+ * App shell owns vertical fit. Bottom padding reserves Emotional Inventory space
+ * so Phaser FIT/CENTER never places the canvas (or HUD anchors) above the viewport.
+ * Overflow stays on the shell/playfield — HTML HUD overlays are siblings, not clipped here.
+ */
+#app-shell {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  flex-direction: column;
+  padding-bottom: var(--inventory-reserve);
+  overflow: hidden;
 }
 
 #game-container {
   position: relative;
-  z-index: 1;
-  margin-bottom: 64px;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
 }
 
 #game-container canvas {
   border: 1px solid #2a2a4a;
   box-shadow: 0 0 40px rgba(0, 229, 255, 0.15);
+}
+
+@media (max-height: 800px) {
+  :root {
+    --inventory-reserve: 64px;
+  }
+}
+
+@media (max-height: 700px) {
+  :root {
+    --inventory-reserve: 56px;
+  }
+
+  .emotional-inventory {
+    padding: 0.25rem;
+    gap: 0.15rem;
+  }
+
+  .hud-btn,
+  .hud-sound {
+    padding: 0.25rem 0.55rem;
+  }
 }
 
 .overlay {
@@ -508,7 +553,7 @@ body {
 /* ── HUD ── */
 .hud-top {
   position: fixed;
-  top: 12px;
+  top: var(--hud-top-inset);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -519,6 +564,7 @@ body {
   border-radius: 6px;
   padding: 0.5rem 1.25rem;
   pointer-events: none;
+  z-index: 11;
 }
 
 .match-score {
@@ -566,11 +612,12 @@ body {
 .emotional-inventory {
   position: fixed;
   left: 50%;
-  bottom: 12px;
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   display: flex;
   gap: 0.25rem;
   width: min(820px, calc(100vw - 24px));
+  max-height: calc(var(--inventory-reserve) - 8px);
   padding: 0.35rem;
   background: rgba(8, 10, 20, 0.94);
   border: 1px solid #2a2a4a;
@@ -836,9 +883,10 @@ body {
 
 .hud-controls {
   position: fixed;
-  top: 12px;
+  top: var(--hud-top-inset);
   right: 16px;
   display: flex;
+  align-items: center;
   gap: 0.5rem;
   z-index: 12;
   pointer-events: auto;
@@ -851,6 +899,7 @@ body {
   font-size: 0.7rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  min-height: 36px;
   padding: 0.35rem 0.65rem;
   border: 1px solid #2a4a3a;
   border-radius: 4px;
@@ -869,6 +918,7 @@ body {
   font-size: 0.7rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  min-height: 36px;
   padding: 0.35rem 0.65rem;
   background: rgba(10, 10, 18, 0.92);
   border: 1px solid #2a2a4a;
@@ -923,7 +973,7 @@ body {
   border-radius: 6px;
   padding: 0.75rem;
   pointer-events: none;
-  max-height: calc(100vh - 120px);
+  max-height: calc(100dvh - var(--inventory-reserve) - 96px);
   overflow: hidden;
   transition: width 0.2s ease, padding 0.2s ease, opacity 0.2s ease;
 }

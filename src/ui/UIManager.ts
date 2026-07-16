@@ -294,20 +294,34 @@ export class UIManager {
       canvasBounds.left +
       playfield.rightHudLeft * scaleX +
       GAME_LAYOUT.STATS_PANEL_GAP * scaleX;
-    const hudTop =
-      canvasBounds.top + (playfield.top + GAME_LAYOUT.STATS_PANEL_TOP_OFFSET) * scaleY;
+    const hudTop = Math.max(
+      // Keep stats below the top control row (min 36px hit area + gap).
+      12 + 36 + 8,
+      canvasBounds.top + (playfield.top + GAME_LAYOUT.STATS_PANEL_TOP_OFFSET) * scaleY
+    );
     const panelWidth = GAME_LAYOUT.STATS_PANEL_WIDTH * scaleX;
 
     this.statsPanel.style.left = `${hudLeft}px`;
-    this.statsPanel.style.top = `${hudTop}px`;
+    this.statsPanel.style.top = `max(var(--hud-top-inset), ${hudTop}px)`;
     this.statsPanel.style.right = 'auto';
     this.statsPanel.style.width = `${panelWidth}px`;
     this.statsPanel.classList.toggle('stats-panel--compact', options.compactStats);
 
     if (this.hudControlsEl) {
+      // Right HUD column + canvas-relative offset, clamped into the visible shell.
+      // Stay clear of the centered scoreboard when the FIT canvas shrinks.
+      let controlsLeft = hudLeft;
+      const scoreboard = document.querySelector('.hud-top') as HTMLElement | null;
+      if (scoreboard) {
+        const scoreRight = scoreboard.getBoundingClientRect().right;
+        controlsLeft = Math.max(controlsLeft, scoreRight + 8);
+      }
+      const controlsWidth = this.hudControlsEl.offsetWidth || 220;
+      controlsLeft = Math.min(controlsLeft, Math.max(8, window.innerWidth - controlsWidth - 8));
+
       this.hudControlsEl.style.right = 'auto';
-      this.hudControlsEl.style.left = `${hudLeft}px`;
-      this.hudControlsEl.style.top = `${canvasBounds.top + 12}px`;
+      this.hudControlsEl.style.left = `${controlsLeft}px`;
+      this.hudControlsEl.style.top = `max(var(--hud-top-inset), ${canvasBounds.top + 12}px)`;
     }
 
     if (!this.dialogueOverlay.classList.contains('hidden')) {
