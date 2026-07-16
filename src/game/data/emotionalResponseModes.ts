@@ -113,10 +113,12 @@ export function emotionalModeIdFromKeyboardEvent(
 }
 
 /**
- * Interaction states for the Emotional Inventory HUD.
- * Scene owns validity; UIManager only renders these states.
+ * @deprecated Modal dialogue states — use EmotionalActionState from emotionalActionConfig.
+ * Kept as a thin alias so older UI render paths compile during migration.
  */
 export type EmotionalInventoryInteractionState = 'idle' | 'ready' | 'resolving';
+
+export type { EmotionalActionState } from './emotionalActionConfig';
 
 /**
  * Map the ball whose emotional stats are being modified to the character

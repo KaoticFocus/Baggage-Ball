@@ -618,7 +618,7 @@ body {
   gap: 0.25rem;
   width: min(820px, calc(100vw - 24px));
   max-height: calc(var(--inventory-reserve) - 8px);
-  padding: 0.35rem;
+  padding: 0.35rem 0.35rem 0.55rem;
   background: rgba(8, 10, 20, 0.94);
   border: 1px solid #2a2a4a;
   border-radius: 6px;
@@ -630,6 +630,20 @@ body {
   pointer-events: auto;
   clip: auto;
   clip-path: none;
+}
+
+.emotional-cooldown-bar {
+  position: absolute;
+  left: 0.35rem;
+  right: 0.35rem;
+  bottom: 0.15rem;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #00e5ff, #ff66aa);
+  transform-origin: left center;
+  pointer-events: none;
+  opacity: 0.9;
+  z-index: 1;
 }
 
 .emotional-slot {
@@ -656,22 +670,88 @@ body {
   outline-offset: 3px;
 }
 
-.emotional-inventory--idle {
-  opacity: 0.55;
+.emotional-inventory--idle,
+.emotional-inventory--disabled {
+  opacity: 0.72;
   border-color: #2a2a4a;
   box-shadow: none;
 }
 
-.emotional-inventory--ready {
+.emotional-inventory--ready,
+.emotional-inventory--available {
   opacity: 1;
   border-color: #00e5ff;
   box-shadow: 0 0 20px rgba(0, 229, 255, 0.28);
 }
 
-.emotional-inventory--resolving {
-  opacity: 0.9;
+.emotional-inventory--resolving,
+.emotional-inventory--cooldown {
+  opacity: 0.95;
   border-color: #667799;
   box-shadow: 0 0 12px rgba(102, 119, 153, 0.25);
+}
+
+.emotional-slot-accepted {
+  animation: emotionalSlotPulse 0.45s ease-out;
+}
+
+@keyframes emotionalSlotPulse {
+  0% {
+    box-shadow: 0 0 0 rgba(0, 229, 255, 0);
+    border-color: #00e5ff;
+  }
+  40% {
+    box-shadow: 0 0 18px rgba(0, 229, 255, 0.55);
+    border-color: #66f0ff;
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+/* Lightweight speech captions — subtitle, not a dialogue modal. */
+.speech-caption {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--inventory-reserve) + 10px);
+  transform: translateX(-50%);
+  width: min(70vw, 760px);
+  max-width: min(70vw, 760px);
+  padding: 0.45rem 0.85rem 0.55rem;
+  background: rgba(8, 10, 18, 0.82);
+  border: 1px solid rgba(0, 229, 255, 0.28);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  z-index: 14;
+  pointer-events: none;
+  text-align: center;
+  opacity: 1;
+  transition: opacity 0.18s ease;
+}
+
+.speech-caption.hidden {
+  display: none;
+}
+
+.speech-caption.speech-caption--fade {
+  opacity: 0;
+}
+
+.speech-caption-speaker {
+  display: block;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #88d8ff;
+  margin-bottom: 0.2rem;
+}
+
+.speech-caption-text {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #e8eef8;
 }
 
 .emotional-slot:hover,

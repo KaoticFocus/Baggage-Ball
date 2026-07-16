@@ -44,6 +44,7 @@ import {
   type EmotionalResponseMode,
   type EmotionalResponseModeId,
 } from '../game/data/emotionalResponseModes';
+import type { EmotionalActionState } from '../game/data/emotionalActionConfig';
 
 const OPPONENT_BARK_DISPLAY_MS = 6400;
 const OPPONENT_BARK_FADE_MS = 500;
@@ -78,10 +79,18 @@ export class UIManager {
   private pauseBanner = document.getElementById('pause-banner')!;
   private debugToastTimer: ReturnType<typeof setTimeout> | null = null;
   private customInputVisible = false;
-  /** Scene-owned interaction state; UIManager only renders it. */
+  /** @deprecated Modal state — prefer emotionalActionState. */
   private emotionalInventoryState: EmotionalInventoryInteractionState = 'idle';
+  /** Real-time Loadout HUD state owned by PlayScene, rendered here. */
+  private emotionalActionState: EmotionalActionState = 'disabled';
   private pendingEmotionalModeId: EmotionalResponseModeId | null = null;
   private emotionalInventoryRendered = false;
+  private emotionalCooldownBar = document.getElementById('emotional-cooldown-bar') as HTMLElement | null;
+  private speechCaption = document.getElementById('speech-caption')!;
+  private speechCaptionSpeaker = document.getElementById('speech-caption-speaker')!;
+  private speechCaptionText = document.getElementById('speech-caption-text')!;
+  private speechCaptionTimer: number | null = null;
+  private speechCaptionFadeTimer: number | null = null;
   private canvasBounds: ScreenBounds | null = null;
   private selectedPaddleSide: PaddleSide = getPlayerPaddleSide();
   private selectedOpponentId: OpponentId = getSelectedOpponentId();
@@ -155,8 +164,8 @@ export class UIManager {
     this.pauseBtn.addEventListener('click', () => this.onPauseToggle?.());
     document.getElementById('hud-quit-btn')!.addEventListener('click', () => this.onQuit?.());
     this.renderEmotionalInventoryOnce();
-    this.setEmotionalInventoryState('idle');
-    // Keyboard 1–9 is owned by PlayScene → selectEmotionalMode (not duplicated here).
+    this.setEmotionalActionState('disabled');
+    // Keyboard 1–9 is owned by PlayScene → useEmotionalAction (not duplicated here).
   }
 
   setCallbacks(callbacks: {
@@ -550,19 +559,12 @@ export class UIManager {
   showBallComment(
     text: string,
     durationMs = 1800,
-    ballScreen?: { x: number; y: number }
+    _ballScreen?: { x: number; y: number }
   ): void {
+    // Prefer lightweight captions over playfield speech bubbles.
     const personality = getPersonalityById(this.activeBallId);
-    this.ballCommentSpeaker.textContent = (personality?.name ?? 'Ball').toUpperCase();
-    this.ballCommentText.textContent = text;
-    this.applyBallCommentTheme();
-    this.ballComment.classList.remove('hidden');
-    this.ballComment.classList.remove('ball-comment--thinking');
-    this.lastBallCommentScreen = ballScreen ?? null;
-    this.repositionBallComment();
-    if (this.ballCommentTimer) clearTimeout(this.ballCommentTimer);
-    this.ballCommentEndTime = Date.now() + durationMs;
-    this.ballCommentTimer = setTimeout(() => this.hideBallComment(), durationMs);
+    this.showSpeechCaption(personality?.name ?? 'Ball', text, Math.max(durationMs, 2800));
+    this.hideBallComment();
   }
 
   private applyBallCommentTheme(): void {
@@ -728,20 +730,36 @@ export class UIManager {
     return this.emotionalInventoryState;
   }
 
+  getEmotionalActionState(): EmotionalActionState {
+    return this.emotionalActionState;
+  }
+
   /**
-   * Scene-owned state driver. UIManager only renders idle/ready/resolving.
-   * Does not decide whether a response is valid.
+   * @deprecated Prefer setEmotionalActionState for real-time Loadout.
    */
   setEmotionalInventoryState(state: EmotionalInventoryInteractionState): void {
     this.emotionalInventoryState = state;
+    const mapped: EmotionalActionState =
+      state === 'ready' ? 'available' : state === 'resolving' ? 'cooldown' : 'disabled';
+    this.setEmotionalActionState(mapped);
+  }
+
+  /** Scene-owned Loadout state driver. UIManager only renders. */
+  setEmotionalActionState(state: EmotionalActionState): void {
+    this.emotionalActionState = state;
+    this.emotionalInventoryState =
+      state === 'available' ? 'ready' : state === 'cooldown' ? 'resolving' : 'idle';
     this.emotionalInventory.classList.remove(
       'emotional-inventory--idle',
       'emotional-inventory--ready',
       'emotional-inventory--resolving',
-      'emotional-inventory--armed'
+      'emotional-inventory--armed',
+      'emotional-inventory--available',
+      'emotional-inventory--cooldown',
+      'emotional-inventory--disabled'
     );
     this.emotionalInventory.classList.add(`emotional-inventory--${state}`);
-    this.emotionalInventory.setAttribute('aria-busy', state === 'resolving' ? 'true' : 'false');
+    this.emotionalInventory.setAttribute('aria-busy', state === 'cooldown' ? 'true' : 'false');
     this.refreshEmotionalInventoryAppearance();
   }
 
@@ -756,9 +774,60 @@ export class UIManager {
     this.refreshEmotionalInventoryAppearance();
   }
 
+  pulseEmotionalMode(modeId: EmotionalResponseModeId): void {
+    const button = this.emotionalInventory.querySelector<HTMLButtonElement>(
+      `.emotional-slot[data-mode-id="${modeId}"]`
+    );
+    if (!button) return;
+    button.classList.remove('emotional-slot-accepted');
+    void button.offsetWidth;
+    button.classList.add('emotional-slot-accepted');
+    window.setTimeout(() => button.classList.remove('emotional-slot-accepted'), 500);
+  }
+
+  /** Cooldown fill 1→0 over the remaining fraction. */
+  setEmotionalCooldownProgress(remaining01: number): void {
+    if (!this.emotionalCooldownBar) return;
+    const clamped = Math.max(0, Math.min(1, remaining01));
+    if (clamped <= 0 || this.emotionalActionState !== 'cooldown') {
+      this.emotionalCooldownBar.classList.add('hidden');
+      this.emotionalCooldownBar.style.transform = 'scaleX(0)';
+      return;
+    }
+    this.emotionalCooldownBar.classList.remove('hidden');
+    this.emotionalCooldownBar.style.transform = `scaleX(${clamped})`;
+  }
+
+  showSpeechCaption(speaker: string, text: string, holdMs = 4200): void {
+    const trimmed = text.replace(/\s+/g, ' ').trim();
+    if (!trimmed) return;
+
+    if (this.speechCaptionTimer) window.clearTimeout(this.speechCaptionTimer);
+    if (this.speechCaptionFadeTimer) window.clearTimeout(this.speechCaptionFadeTimer);
+
+    this.speechCaptionSpeaker.textContent = speaker;
+    this.speechCaptionText.textContent = trimmed;
+    this.speechCaption.classList.remove('hidden', 'speech-caption--fade');
+
+    this.speechCaptionTimer = window.setTimeout(() => {
+      this.speechCaption.classList.add('speech-caption--fade');
+      this.speechCaptionFadeTimer = window.setTimeout(() => {
+        this.speechCaption.classList.add('hidden');
+        this.speechCaption.classList.remove('speech-caption--fade');
+      }, 220);
+    }, holdMs);
+  }
+
+  hideSpeechCaption(): void {
+    if (this.speechCaptionTimer) window.clearTimeout(this.speechCaptionTimer);
+    if (this.speechCaptionFadeTimer) window.clearTimeout(this.speechCaptionFadeTimer);
+    this.speechCaption.classList.add('hidden');
+    this.speechCaption.classList.remove('speech-caption--fade');
+  }
+
   /**
    * Forward a click on an inventory slot to the scene.
-   * PlayScene.selectEmotionalMode owns READY checks and READY→RESOLVING.
+   * PlayScene.useEmotionalAction owns availability / cooldown.
    */
   private requestEmotionalMode(id: EmotionalResponseModeId): void {
     this.onEmotionalResponseSelected?.(getEmotionalResponseMode(id));
@@ -769,13 +838,17 @@ export class UIManager {
     if (this.emotionalInventoryRendered) return;
 
     const inventory = this.emotionalInventory;
-    inventory.innerHTML = EMOTIONAL_RESPONSE_MODES.map(
+    const slots = EMOTIONAL_RESPONSE_MODES.map(
       (mode) => `
       <button type="button" class="emotional-slot" data-mode-id="${mode.id}" title="${mode.description}" aria-pressed="false">
         <span class="emotional-slot-key">${mode.key}</span><span class="emotional-slot-label">${mode.label}</span>
       </button>
     `
     ).join('');
+    inventory.innerHTML =
+      slots +
+      '<div id="emotional-cooldown-bar" class="emotional-cooldown-bar hidden" aria-hidden="true"></div>';
+    this.emotionalCooldownBar = document.getElementById('emotional-cooldown-bar');
 
     inventory.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('.emotional-slot');
@@ -792,7 +865,7 @@ export class UIManager {
   private refreshEmotionalInventoryAppearance(): void {
     if (!this.emotionalInventoryRendered) return;
 
-    const interactive = this.emotionalInventoryState === 'ready';
+    const interactive = this.emotionalActionState === 'available';
     const buttons = this.emotionalInventory.querySelectorAll<HTMLButtonElement>('.emotional-slot');
 
     buttons.forEach((button) => {
@@ -851,16 +924,22 @@ export class UIManager {
     this.renderEmotionalInventoryOnce();
     this.emotionalInventory.classList.remove('hidden');
     this.emotionalInventory.classList.toggle('emotional-inventory-dev-probe', import.meta.env.DEV);
-    this.setEmotionalInventoryState(this.emotionalInventoryState);
+    this.setEmotionalActionState('available');
     requestAnimationFrame(() => this.logEmotionalInventoryLayout());
   }
 
   private hideEmotionalInventory(): void {
     this.clearPendingEmotionalMode();
-    this.setEmotionalInventoryState('idle');
+    this.setEmotionalActionState('disabled');
+    this.setEmotionalCooldownProgress(0);
     this.emotionalInventory.classList.add('hidden');
+    this.hideSpeechCaption();
   }
 
+  /**
+   * Legacy modal dialogue entry — disabled for real-time Loadout gameplay.
+   * Captions + VoiceDirector carry spoken lines; the overlay stays hidden.
+   */
   showDialogue(
     event: DialogueEvent,
     _mode: InputMode,
@@ -873,58 +952,16 @@ export class UIManager {
   ): void {
     this.customInputVisible = false;
     if (canvasBounds) this.canvasBounds = canvasBounds;
-
-    this.dialogueOverlay.classList.remove('hidden');
-    document.getElementById('response-panel')!.classList.remove('hidden');
-
-    document.getElementById('hover-banner')!.classList.toggle('hidden', !isHover);
-    document.getElementById('ball-line')!.textContent = truncateHoverText(event.ballLine, 160);
-    document.getElementById('ball-reaction')!.classList.add('hidden');
-    document.getElementById('emotional-result')!.classList.add('hidden');
-    document.getElementById('player-response-echo')!.classList.add('hidden');
+    this.dialogueOverlay.classList.add('hidden');
     this.updateBallMeta(hoverType, mood);
-
-    // Intentionally do not render event.responses as numbered buttons.
-    // Legacy response data remains on the event for internal use only.
-    this.renderDialogueResponsePaths();
-    this.hideCustomInputArea();
-    requestAnimationFrame(() => this.positionDialogueCluster(false));
-  }
-
-  /**
-   * Dialogue responses are Emotional Inventory (1–9) or Custom Response only.
-   * Preset canned-response buttons are not rendered.
-   */
-  private renderDialogueResponsePaths(): void {
-    const choices = document.getElementById('response-choices')!;
-    choices.classList.remove('hidden');
-    choices.innerHTML = '';
-
-    const hint = document.createElement('p');
-    hint.className = 'response-hint';
-    hint.textContent = 'Choose an emotional response below.';
-    choices.appendChild(hint);
-
-    const paths = document.createElement('div');
-    paths.className = 'response-paths';
-
-    const inventoryPath = document.createElement('div');
-    inventoryPath.className = 'response-path response-path-inventory';
-    inventoryPath.innerHTML =
-      '<span class="response-path-label">Emotional Inventory</span>' +
-      '<span class="response-path-detail">Press or click 1–9</span>';
-    paths.appendChild(inventoryPath);
-
-    const customBtn = document.createElement('button');
-    customBtn.type = 'button';
-    customBtn.className = 'response-path response-path-custom';
-    customBtn.innerHTML =
-      '<span class="response-path-label">Custom Response</span>' +
-      '<span class="response-path-detail">Type your own reply</span>';
-    customBtn.addEventListener('click', () => this.showCustomInput());
-    paths.appendChild(customBtn);
-
-    choices.appendChild(paths);
+    // Surface the line as a caption only — never open the modal dialogue UI.
+    if (event.ballLine?.trim()) {
+      this.showSpeechCaption(
+        document.getElementById('hud-ball-name')?.textContent?.trim() || 'Ball',
+        truncateHoverText(event.ballLine, 160)
+      );
+    }
+    void isHover;
   }
 
   showCustomInput(): void {

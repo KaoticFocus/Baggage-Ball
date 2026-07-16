@@ -60,15 +60,22 @@
       </div>
     </div>
 
-    <div id="emotional-inventory" class="emotional-inventory hidden" aria-label="Emotional Inventory"></div>
+    <div id="emotional-inventory" class="emotional-inventory hidden" aria-label="Emotional Loadout">
+      <div id="emotional-cooldown-bar" class="emotional-cooldown-bar hidden" aria-hidden="true"></div>
+    </div>
 
-    <!-- Dialogue overlay -->
-    <div id="dialogue-overlay" class="overlay hidden">
-      <div id="hover-banner" class="hover-banner hidden">The ball is hovering.</div>
-      <div id="dialogue-cluster" class="dialogue-cluster">
+    <!-- Lightweight non-blocking speech captions (not a dialogue modal). -->
+    <div id="speech-caption" class="speech-caption hidden" aria-live="polite">
+      <span id="speech-caption-speaker" class="speech-caption-speaker"></span>
+      <p id="speech-caption-text" class="speech-caption-text"></p>
+    </div>
+
+    <!-- Legacy dialogue overlay kept hidden; gameplay no longer opens it. -->
+    <div id="dialogue-overlay" class="overlay hidden" aria-hidden="true">
+      <div id="hover-banner" class="hover-banner hidden"></div>
+      <div id="dialogue-cluster" class="dialogue-cluster hidden">
         <div id="dialogue-drag-handle" class="dialogue-cluster-header">
           <span class="dialogue-drag-title">Ball dialogue</span>
-          <span class="dialogue-drag-hint">Drag to move</span>
           <button type="button" id="dialogue-panel-reset" class="dialogue-panel-reset">Reset</button>
         </div>
         <div id="speech-bubble" class="speech-bubble">

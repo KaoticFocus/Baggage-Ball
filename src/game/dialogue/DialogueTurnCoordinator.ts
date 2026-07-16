@@ -30,10 +30,15 @@ export class DialogueTurnCoordinator {
     turn: DialogueTurn,
     options?: {
       onReaction?: (reaction: GeneratedReaction) => void;
+      onPlayerLine?: (line: string) => void;
       targetStillExists?: (targetId: string) => boolean;
       interactionId?: number | string;
     }
   ): Promise<{ ok: boolean; reaction: GeneratedReaction | null }> {
+    // Newer emotional flavor replaces a still-pending previous turn's coordination.
+    if (this.activeTurnId && this.activeTurnId !== turn.id) {
+      this.cancelActiveTurn();
+    }
     if (this.activeTurnId) {
       return { ok: false, reaction: null };
     }
@@ -52,30 +57,33 @@ export class DialogueTurnCoordinator {
         console.log('[DialogueTurn] playerLine', generatedPlayerLine.playerLine);
       }
 
+      options?.onPlayerLine?.(generatedPlayerLine.playerLine);
+
       const reactionPromise = this.generateCharacterReaction(
         turn,
         generatedPlayerLine.playerLine
       );
 
+      // TTS failure must not block captions or character reaction generation.
       if (generatedPlayerLine.playerLine.trim()) {
-        const playerPlayback = await voiceDirector.speak({
-          characterId: turn.player.characterId,
-          speakerId: turn.player.id,
-          speakerKind: turn.player.kind,
-          text: generatedPlayerLine.playerLine,
-          priority: 'emotionalResponse',
-          category: 'emotionalResponse',
-          turnId: turn.id,
-          interactionId: options?.interactionId,
-          interruptible: false,
-          dedupeKey: `loadout-player:${turn.id}`,
-          metadata: { loadout: turn.loadout, deliveryHints: generatedPlayerLine.deliveryHints },
-        });
-        if (!playerPlayback.ok && !playerPlayback.cancelled) {
-          throw new Error(playerPlayback.message ?? 'Player speech synthesis/playback failed');
-        }
-        if (playerPlayback.cancelled) {
-          throw new Error('Player speech cancelled');
+        try {
+          await voiceDirector.speak({
+            characterId: turn.player.characterId,
+            speakerId: turn.player.id,
+            speakerKind: turn.player.kind,
+            text: generatedPlayerLine.playerLine,
+            priority: 'emotionalResponse',
+            category: 'emotionalResponse',
+            turnId: turn.id,
+            interactionId: options?.interactionId,
+            interruptible: true,
+            dedupeKey: `loadout-player:${turn.id}`,
+            metadata: { loadout: turn.loadout, deliveryHints: generatedPlayerLine.deliveryHints },
+          });
+        } catch (error) {
+          if (import.meta.env.DEV) {
+            console.warn('[DialogueTurn] player TTS failed; caption remains', error);
+          }
         }
       }
 
@@ -88,14 +96,21 @@ export class DialogueTurnCoordinator {
         console.log('[DialogueTurn] reactionLine', reaction.reactionLine);
       }
 
+      options?.onReaction?.(reaction);
+
       if (reaction.reactionLine.trim()) {
-        await this.speakAs(turn.target, reaction.reactionLine, turn.id, options?.interactionId, {
-          loadout: turn.loadout,
-          deliveryHints: reaction.deliveryHints,
-        });
+        try {
+          await this.speakAs(turn.target, reaction.reactionLine, turn.id, options?.interactionId, {
+            loadout: turn.loadout,
+            deliveryHints: reaction.deliveryHints,
+          });
+        } catch (error) {
+          if (import.meta.env.DEV) {
+            console.warn('[DialogueTurn] reaction TTS failed; caption remains', error);
+          }
+        }
       }
 
-      options?.onReaction?.(reaction);
       return { ok: true, reaction };
     } catch (error) {
       if (import.meta.env.DEV) {
@@ -104,9 +119,7 @@ export class DialogueTurnCoordinator {
           message: error instanceof Error ? error.message : String(error),
         });
       }
-      voiceDirector.cancelRequest(`loadout-player:${turn.id}`);
-      // Cancel any turn-tagged speech.
-      this.cancelActiveTurn();
+      voiceDirector.cancelTurn(turn.id, false);
       return { ok: false, reaction };
     } finally {
       if (this.activeTurnId === turn.id) {
@@ -137,7 +150,7 @@ export class DialogueTurnCoordinator {
       category: 'emotionalResponse',
       turnId,
       interactionId,
-      interruptible: false,
+      interruptible: true,
       dedupeKey: `loadout-ball:${turnId}`,
       metadata,
     });
