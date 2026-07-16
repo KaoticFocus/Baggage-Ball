@@ -86,6 +86,15 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
     return this.playback.getWaveformSamples(sampleCount);
   }
 
+  /** Smoothed 0–1 speech energy from the shared analyser (or temporary envelope). */
+  getSpeechEnergy(): number {
+    return this.playback.getSpeechEnergy();
+  }
+
+  isSpeechPlaybackActive(): boolean {
+    return this.playback.isPlaybackActive();
+  }
+
   /**
    * Submit a character speech request. Resolves when that request finishes,
    * is cancelled, dropped, or fails. Never plays prerecorded dialogue.

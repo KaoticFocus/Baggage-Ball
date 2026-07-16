@@ -32,15 +32,19 @@ export class SpeechVisualRegistry {
     }
   }
 
-  update(): void {
+  update(deltaMs = 16): void {
     const activeSpeakerId = this.speechDirector.getCurrentSpeakerId();
-    if (!activeSpeakerId) return;
+    if (!activeSpeakerId) {
+      // Keep decaying energy when no speaker — waveforms handle their own hide.
+      return;
+    }
 
     const waveform = this.waveforms.get(activeSpeakerId);
     if (!waveform) return;
 
-    waveform.updatePosition();
-    waveform.updateSamples(this.speechDirector.getWaveformSamples(waveform.sampleCount));
+    const energy = this.speechDirector.getSpeechEnergy();
+    const samples = this.speechDirector.getWaveformSamples(waveform.sampleCount);
+    waveform.updateFrame(samples, energy, deltaMs);
   }
 
   destroy(): void {

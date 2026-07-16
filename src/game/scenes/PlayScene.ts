@@ -1058,7 +1058,7 @@ export class PlayScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
-    this.speechVisualRegistry?.update();
+    this.speechVisualRegistry?.update(delta);
 
     if (this.gameState === 'matchEnd') return;
 
@@ -1622,17 +1622,26 @@ export class PlayScene extends Phaser.Scene {
     this.teardownSpeechVisuals();
     this.speechVisualRegistry = new SpeechVisualRegistry(voiceDirector);
 
+    const playfieldBounds = () => ({
+      left: this.playfield.left,
+      right: this.playfield.right,
+      top: this.playfield.top,
+      bottom: this.playfield.bottom,
+    });
+
     this.speechVisualRegistry.register(
       VOICE_SPEAKER_IDS.player,
       new SpeakerWaveform(this, {
         orientation: 'vertical',
-        sampleCount: 15,
-        length: this.PADDLE_LENGTH * 0.78,
-        amplitude: this.PADDLE_THICKNESS * 0.24,
-        lineWidth: 2,
+        sampleCount: 22,
+        length: this.PADDLE_LENGTH * 0.95,
+        amplitude: this.PADDLE_THICKNESS * 0.85,
+        lineWidth: 3.4,
         followTarget: this.playerPaddle,
-        clipInsideTarget: true,
-        color: 0x88ffff,
+        clipInsideTarget: false,
+        characterId: 'player-paddle',
+        getPlayfieldBounds: playfieldBounds,
+        depth: 8,
       })
     );
 
@@ -1640,13 +1649,15 @@ export class PlayScene extends Phaser.Scene {
       VOICE_SPEAKER_IDS.opponent,
       new SpeakerWaveform(this, {
         orientation: 'vertical',
-        sampleCount: 15,
-        length: this.PADDLE_LENGTH * 0.78,
-        amplitude: this.PADDLE_THICKNESS * 0.24,
-        lineWidth: 2,
+        sampleCount: 22,
+        length: this.PADDLE_LENGTH * 0.95,
+        amplitude: this.PADDLE_THICKNESS * 0.9,
+        lineWidth: 3.6,
         followTarget: this.opponentPaddle,
-        clipInsideTarget: true,
-        color: 0xaabbcc,
+        clipInsideTarget: false,
+        characterId: this.opponentId === 'midlifeDave' ? 'midlife-dave' : 'opponent-paddle',
+        getPlayfieldBounds: playfieldBounds,
+        depth: 8,
       })
     );
 
@@ -1654,15 +1665,20 @@ export class PlayScene extends Phaser.Scene {
       `ball:${this.ballId}`,
       new SpeakerWaveform(this, {
         orientation: 'horizontal',
-        sampleCount: 19,
-        length: this.BALL_RADIUS * 2 * 1.18,
-        amplitude: this.BALL_RADIUS * 2 * 0.14,
-        lineWidth: 2.5,
+        sampleCount: 28,
+        // ~3× prior visual span / amplitude for a major emotional presence.
+        length: this.BALL_RADIUS * 2 * 3.4,
+        amplitude: this.BALL_RADIUS * 2 * 0.48,
+        lineWidth: 4.2,
         followTarget: this.ball,
-        offsetY: this.BALL_RADIUS * 0.16,
+        auraTarget: this.ballGlow,
+        offsetY: this.BALL_RADIUS * 0.05,
         clipInsideTarget: false,
         ignoreTargetRotation: true,
+        characterId: this.ballId,
         color: ballAccent,
+        getPlayfieldBounds: playfieldBounds,
+        depth: 8,
       })
     );
   }

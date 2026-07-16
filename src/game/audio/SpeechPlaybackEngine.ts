@@ -4,6 +4,12 @@
  * One AudioContext + one HTMLAudioElement + one AnalyserNode.
  * Fetches /.netlify/functions/character-speech (JSON + audioBase64).
  * Never exposes API keys or voice IDs.
+ *
+ * Waveform analysis:
+ * - Reuses a single AnalyserNode + time-domain buffer (no per-line AudioContext).
+ * - createMediaElementSource() is called once for the shared audio element.
+ * - If analyser output is near-silent while playback is active, a temporary
+ *   amplitude-envelope animation is used (documented fallback — not a permanent loop).
  */
 
 import { soundManager } from '../services/SoundManager';
@@ -38,6 +44,10 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
   return new Blob([bytes], { type: mimeType });
 }
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
 export class SpeechPlaybackEngine {
   private audioContext: AudioContext | null = null;
   private readonly audioElement = new Audio();
@@ -46,6 +56,14 @@ export class SpeechPlaybackEngine {
   private activeObjectUrl: string | null = null;
   private graphReady = false;
   private playGeneration = 0;
+
+  private playbackActive = false;
+  private smoothedEnergy = 0;
+  private lastEnergyTs = 0;
+  private fallbackPhase = 0;
+  private timeDomainBuffer: Uint8Array<ArrayBuffer> | null = null;
+  private sampleScratch: number[] = [];
+  private usingEnvelopeFallback = false;
 
   constructor() {
     this.audioElement.preload = 'auto';
@@ -117,6 +135,7 @@ export class SpeechPlaybackEngine {
         this.audioElement.onended = null;
         this.audioElement.onerror = null;
         options.signal?.removeEventListener('abort', onAbort);
+        this.setPlaybackActive(false);
       };
 
       const onAbort = (): void => {
@@ -146,11 +165,19 @@ export class SpeechPlaybackEngine {
         reject(new Error('Audio playback failed.'));
       };
 
-      void this.audioElement.play().catch((error) => {
-        cleanup();
-        reject(error);
-      });
+      void this.audioElement
+        .play()
+        .then(() => {
+          if (generation === this.playGeneration) {
+            this.setPlaybackActive(true);
+          }
+        })
+        .catch((error) => {
+          cleanup();
+          reject(error);
+        });
     }).catch((error) => {
+      this.setPlaybackActive(false);
       if (error instanceof DOMException && error.name === 'AbortError') {
         return -1;
       }
@@ -161,6 +188,7 @@ export class SpeechPlaybackEngine {
     });
 
     if (generation === this.playGeneration) {
+      this.setPlaybackActive(false);
       this.releaseObjectUrl();
     }
 
@@ -179,28 +207,133 @@ export class SpeechPlaybackEngine {
 
   stop(): void {
     this.playGeneration += 1;
+    this.setPlaybackActive(false);
     this.audioElement.pause();
     this.audioElement.removeAttribute('src');
     this.audioElement.load();
     this.releaseObjectUrl();
   }
 
-  getWaveformSamples(sampleCount: number): number[] {
-    const analyser = this.analyser;
-    if (!analyser || sampleCount <= 0) {
-      return Array.from({ length: Math.max(0, sampleCount) }, () => 0);
+  isPlaybackActive(): boolean {
+    return this.playbackActive;
+  }
+
+  isUsingEnvelopeFallback(): boolean {
+    return this.usingEnvelopeFallback;
+  }
+
+  /**
+   * Smoothed 0–1 speech energy for dramatic waveform scaling.
+   * Prefers real AnalyserNode RMS; falls back to a temporary envelope only while
+   * playback is active and analyser output is near-silent.
+   */
+  getSpeechEnergy(): number {
+    const now = performance.now();
+    const dt = this.lastEnergyTs > 0 ? Math.min(0.05, (now - this.lastEnergyTs) / 1000) : 0.016;
+    this.lastEnergyTs = now;
+
+    if (!this.playbackActive) {
+      this.usingEnvelopeFallback = false;
+      this.smoothedEnergy = Math.max(0, this.smoothedEnergy - dt * 2.8);
+      if (this.smoothedEnergy < 0.01) this.smoothedEnergy = 0;
+      return this.smoothedEnergy;
     }
 
-    const raw = new Uint8Array(analyser.fftSize);
+    let rawEnergy = this.readAnalyserRmsEnergy();
+    this.usingEnvelopeFallback = false;
+
+    // Temporary envelope fallback — only while playback is active and analyser is mute.
+    if (rawEnergy < 0.04) {
+      this.usingEnvelopeFallback = true;
+      this.fallbackPhase += dt;
+      const a = 0.5 + 0.5 * Math.sin(this.fallbackPhase * 9.2);
+      const b = 0.5 + 0.5 * Math.sin(this.fallbackPhase * 14.7 + 1.3);
+      rawEnergy = 0.28 + 0.22 * a + 0.18 * b * b;
+    } else {
+      this.fallbackPhase = 0;
+    }
+
+    const attack = 0.62;
+    const decay = 0.14;
+    if (rawEnergy > this.smoothedEnergy) {
+      this.smoothedEnergy += (rawEnergy - this.smoothedEnergy) * attack;
+    } else {
+      this.smoothedEnergy += (rawEnergy - this.smoothedEnergy) * decay;
+    }
+
+    this.smoothedEnergy = Math.max(0.18, Math.min(1, this.smoothedEnergy));
+    return this.smoothedEnergy;
+  }
+
+  /** Reuses an internal scratch buffer — do not retain across frames. */
+  getWaveformSamples(sampleCount: number): number[] {
+    if (sampleCount <= 0) return [];
+    if (this.sampleScratch.length !== sampleCount) {
+      this.sampleScratch = new Array(sampleCount).fill(0);
+    }
+
+    const analyser = this.analyser;
+    if (!analyser || !this.playbackActive) {
+      for (let i = 0; i < sampleCount; i += 1) this.sampleScratch[i] = 0;
+      return this.sampleScratch;
+    }
+
+    // Keep energy in sync before shaping samples.
+    const energy = this.getSpeechEnergy();
+    const raw = this.ensureTimeDomainBuffer();
     analyser.getByteTimeDomainData(raw);
 
-    const samples: number[] = [];
+    if (this.usingEnvelopeFallback) {
+      for (let index = 0; index < sampleCount; index += 1) {
+        const t = index / Math.max(1, sampleCount - 1);
+        const wave =
+          Math.sin(t * Math.PI * 4 + this.fallbackPhase * 10) * 0.55 +
+          Math.sin(t * Math.PI * 7 + this.fallbackPhase * 6) * 0.35 * energy;
+        this.sampleScratch[index] = wave * (0.4 + energy * 0.75);
+      }
+      return this.sampleScratch;
+    }
+
     const step = raw.length / sampleCount;
     for (let index = 0; index < sampleCount; index += 1) {
       const rawIndex = Math.floor(index * step);
-      samples.push((raw[rawIndex]! - 128) / 128);
+      const bipolar = ((raw[rawIndex] ?? 128) - 128) / 128;
+      const shaped = bipolar * (0.45 + energy * 0.9);
+      this.sampleScratch[index] = clamp(shaped, -1.15, 1.15);
     }
-    return samples;
+
+    return this.sampleScratch;
+  }
+
+  private setPlaybackActive(active: boolean): void {
+    this.playbackActive = active;
+    if (!active) {
+      this.usingEnvelopeFallback = false;
+      this.fallbackPhase = 0;
+    }
+  }
+
+  private readAnalyserRmsEnergy(): number {
+    const analyser = this.analyser;
+    if (!analyser) return 0;
+    const raw = this.ensureTimeDomainBuffer();
+    analyser.getByteTimeDomainData(raw);
+
+    let sum = 0;
+    for (let i = 0; i < raw.length; i += 1) {
+      const v = ((raw[i] ?? 128) - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / raw.length);
+    return Math.max(0, Math.min(1, (rms - 0.015) / 0.32));
+  }
+
+  private ensureTimeDomainBuffer(): Uint8Array<ArrayBuffer> {
+    const size = this.analyser?.fftSize ?? 256;
+    if (!this.timeDomainBuffer || this.timeDomainBuffer.length !== size) {
+      this.timeDomainBuffer = new Uint8Array(new ArrayBuffer(size));
+    }
+    return this.timeDomainBuffer as Uint8Array<ArrayBuffer>;
   }
 
   private ensureGraph(): AudioContext {
@@ -218,12 +351,14 @@ export class SpeechPlaybackEngine {
     this.audioContext = new Ctor();
     this.analyser = this.audioContext.createAnalyser();
     this.analyser.fftSize = 256;
-    this.analyser.smoothingTimeConstant = 0.65;
+    this.analyser.smoothingTimeConstant = 0.55;
 
+    // createMediaElementSource may only be called once per element.
     this.source = this.audioContext.createMediaElementSource(this.audioElement);
     this.source.connect(this.analyser);
     this.analyser.connect(this.audioContext.destination);
     this.graphReady = true;
+    this.timeDomainBuffer = new Uint8Array(new ArrayBuffer(this.analyser.fftSize));
     return this.audioContext;
   }
 
