@@ -72,6 +72,46 @@ export function getEmotionalResponseMode(id: EmotionalResponseModeId): Emotional
   return EMOTIONAL_RESPONSE_MODES.find((mode) => mode.id === id) ?? EMOTIONAL_RESPONSE_MODES[0];
 }
 
+/** Digit / Numpad code → mode id. Prefer event.code over event.key for layout safety. */
+const KEYBOARD_CODE_TO_MODE_ID: Readonly<Record<string, EmotionalResponseModeId>> = {
+  Digit1: 'deflect',
+  Digit2: 'apologize',
+  Digit3: 'validate',
+  Digit4: 'challenge',
+  Digit5: 'flirt',
+  Digit6: 'mock',
+  Digit7: 'reassure',
+  Digit8: 'set-boundary',
+  Digit9: 'go-silent',
+  Numpad1: 'deflect',
+  Numpad2: 'apologize',
+  Numpad3: 'validate',
+  Numpad4: 'challenge',
+  Numpad5: 'flirt',
+  Numpad6: 'mock',
+  Numpad7: 'reassure',
+  Numpad8: 'set-boundary',
+  Numpad9: 'go-silent',
+};
+
+/**
+ * Map a keyboard event to an Emotional Loadout mode.
+ * Primary: event.code (Digit1–9 / Numpad1–9). Fallback: event.key "1"–"9".
+ */
+export function emotionalModeIdFromKeyboardEvent(
+  event: KeyboardEvent
+): EmotionalResponseModeId | null {
+  const fromCode = KEYBOARD_CODE_TO_MODE_ID[event.code];
+  if (fromCode) return fromCode;
+
+  if (event.key.length === 1 && event.key >= '1' && event.key <= '9') {
+    const mode = EMOTIONAL_RESPONSE_MODES.find((candidate) => candidate.key === event.key);
+    return mode?.id ?? null;
+  }
+
+  return null;
+}
+
 /**
  * Interaction states for the Emotional Inventory HUD.
  * Scene owns validity; UIManager only renders these states.

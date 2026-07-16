@@ -51,8 +51,10 @@ import type { DialogueResponse } from '../types/DialogueTypes';
 import type { BehaviorModifier } from '../types/BallTypes';
 import { STAT_LABELS } from '../types/BallTypes';
 import {
+  emotionalModeIdFromKeyboardEvent,
   getEmotionalResponseCharacterIdForBall,
   getEmotionalResponseEffects,
+  getEmotionalResponseMode,
   type EmotionalInventoryInteractionState,
   type EmotionalResponseMode,
   type EmotionalResponseModeId,
@@ -80,7 +82,10 @@ import {
   type PlayfieldRect,
 } from '../layout/GameLayout';
 import type { ScreenBounds } from '../../ui/dialogueBubbleLayout';
-import { isTypingInFormField } from '../../ui/formInput';
+import { isEditableTarget, isTypingInFormField } from '../../ui/formInput';
+
+/** Dev-only Emotional Loadout keyboard diagnostics (quiet unless DEV). */
+const DEBUG_LOADOUT_KEYS = import.meta.env.DEV;
 
 type GameState = 'intro' | 'countdown' | 'playing' | 'hover' | 'pointBreak' | 'matchEnd';
 
@@ -181,6 +186,9 @@ export class PlayScene extends Phaser.Scene {
   private emotionalInteractionId = 0;
   private speechVisualRegistry: SpeechVisualRegistry | null = null;
   private emotionalLoadoutController: EmotionalLoadoutController | null = null;
+  private readonly onEmotionalLoadoutKeyDown = (event: KeyboardEvent): void => {
+    this.handleEmotionalLoadoutKeyDown(event);
+  };
   private valentineThinkingRotationTimer: number | null = null;
   private valentineThinkingNotesTimer: number | null = null;
   private valentineThinkingStartedAt = 0;
@@ -322,9 +330,11 @@ export class PlayScene extends Phaser.Scene {
 
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.setupKeyboard();
+    this.setupEmotionalLoadoutKeyboard();
     this.setupMousePaddleInput();
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.teardownEmotionalLoadoutKeyboard();
       this.resetEmotionalInventoryInteraction();
       this.emotionalLoadoutController?.cancel();
       this.teardownSpeechVisuals();
@@ -333,6 +343,7 @@ export class PlayScene extends Phaser.Scene {
       voiceDirector.setCurrentInteractionId(null);
     });
     this.events.once(Phaser.Scenes.Events.DESTROY, () => {
+      this.teardownEmotionalLoadoutKeyboard();
       this.resetEmotionalInventoryInteraction();
       this.emotionalLoadoutController?.cancel();
       this.teardownSpeechVisuals();
@@ -363,7 +374,7 @@ export class PlayScene extends Phaser.Scene {
 
     uiManager.showPlaying(this.ballId, ballName, opponentName, opponentShort);
     uiManager.setCallbacks({
-      onEmotionalResponseSelected: (mode) => void this.submitEmotionalResponse(mode),
+      onEmotionalResponseSelected: (mode) => this.selectEmotionalMode(mode.id, 'click'),
       onCustomResponseSubmitted: (text) => void this.submitCustomResponse(text),
     });
     this.emotionalLoadoutController = new EmotionalLoadoutController(
@@ -982,6 +993,68 @@ export class PlayScene extends Phaser.Scene {
       this.opponentAi.adjustDifficulty(1);
       uiManager.showDebugToast(`Opponent: ${this.opponentAi.getDifficultyTier()}`);
     });
+    // Emotional Loadout 1–9 uses a single window listener (setupEmotionalLoadoutKeyboard).
+    // Do not register Digit/Numpad keys on Phaser — avoids competing handlers.
+  }
+
+  /**
+   * One window-level listener for Loadout shortcuts. Not re-bound on hover start.
+   * Removed on scene shutdown/destroy so restarts cannot stack listeners.
+   */
+  private setupEmotionalLoadoutKeyboard(): void {
+    window.removeEventListener('keydown', this.onEmotionalLoadoutKeyDown);
+    window.addEventListener('keydown', this.onEmotionalLoadoutKeyDown);
+  }
+
+  private teardownEmotionalLoadoutKeyboard(): void {
+    window.removeEventListener('keydown', this.onEmotionalLoadoutKeyDown);
+  }
+
+  private logLoadoutKey(message: string, details?: Record<string, unknown>): void {
+    if (!DEBUG_LOADOUT_KEYS) return;
+    if (details) {
+      console.log(`[LoadoutKey] ${message}`, details);
+      return;
+    }
+    console.log(`[LoadoutKey] ${message}`);
+  }
+
+  private handleEmotionalLoadoutKeyDown(event: KeyboardEvent): void {
+    if (event.repeat) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+    const modeId = emotionalModeIdFromKeyboardEvent(event);
+    if (!modeId) return;
+
+    this.logLoadoutKey('Key received', {
+      code: event.code,
+      key: event.key,
+      mappedMode: modeId,
+      state: this.emotionalInventoryState,
+    });
+
+    if (isEditableTarget(event.target)) {
+      this.logLoadoutKey('Key ignored because an editable element has focus', {
+        modeId,
+        target: (event.target as Element | null)?.nodeName,
+      });
+      return;
+    }
+
+    if (this.emotionalInventoryState !== 'ready') {
+      // Avoid rally-spam; only log when a hover interaction is active.
+      if (this.gameState === 'hover') {
+        this.logLoadoutKey('Key ignored because state is not READY', {
+          modeId,
+          state: this.emotionalInventoryState,
+        });
+      }
+      return;
+    }
+
+    event.preventDefault();
+    this.logLoadoutKey('Key mapped to mode', { modeId });
+    this.selectEmotionalMode(modeId, 'keyboard');
   }
 
   update(_time: number, delta: number): void {
@@ -1448,14 +1521,44 @@ export class PlayScene extends Phaser.Scene {
     );
   }
 
-  private async submitEmotionalResponse(mode: EmotionalResponseMode): Promise<void> {
-    if (this.gameState !== 'hover' || !this.currentEvent) return;
-    // Atomic READY → RESOLVING: ignore repeats / non-ready selections.
-    if (this.emotionalInventoryState !== 'ready') return;
-    if (!this.emotionalLoadoutController) return;
+  /**
+   * Authoritative Emotional Loadout selection for both clicks and keyboard.
+   * Immediately transitions READY → RESOLVING so rapid input cannot stack.
+   */
+  private selectEmotionalMode(
+    modeId: EmotionalResponseModeId,
+    inputSource: 'click' | 'keyboard'
+  ): void {
+    if (this.gameState !== 'hover' || !this.currentEvent) {
+      this.logLoadoutKey('Mode selection rejected (not in hover)', { modeId, inputSource });
+      return;
+    }
+
+    if (this.emotionalInventoryState !== 'ready') {
+      this.logLoadoutKey(
+        this.emotionalInventoryState === 'resolving'
+          ? 'Mode selection rejected as duplicate'
+          : 'Mode selection rejected (not READY)',
+        { modeId, inputSource, state: this.emotionalInventoryState }
+      );
+      return;
+    }
+
+    if (!this.emotionalLoadoutController) {
+      this.logLoadoutKey('Mode selection rejected (no controller)', { modeId, inputSource });
+      return;
+    }
+
+    const mode = getEmotionalResponseMode(modeId);
+    this.beginEmotionalInventoryResolving(mode.id);
+    this.logLoadoutKey('Mode selection accepted', { modeId, inputSource });
+    void this.runEmotionalResponse(mode);
+  }
+
+  private async runEmotionalResponse(mode: EmotionalResponseMode): Promise<void> {
+    if (!this.currentEvent || !this.emotionalLoadoutController) return;
 
     const interactionId = this.emotionalInteractionId;
-    this.beginEmotionalInventoryResolving(mode.id);
 
     // Hide response UI text paths; spoken lines stay internal unless debug is on.
     document.getElementById('response-panel')?.classList.add('hidden');

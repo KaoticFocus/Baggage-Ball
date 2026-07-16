@@ -156,18 +156,7 @@ export class UIManager {
     document.getElementById('hud-quit-btn')!.addEventListener('click', () => this.onQuit?.());
     this.renderEmotionalInventoryOnce();
     this.setEmotionalInventoryState('idle');
-    document.addEventListener('keydown', (event) => {
-      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
-      // Space must never auto-select a legacy canned response during inventory use.
-      if (event.key === ' ' || event.code === 'Space') return;
-      const target = event.target as HTMLElement | null;
-      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
-      if (this.emotionalInventoryState !== 'ready') return;
-      const mode = EMOTIONAL_RESPONSE_MODES.find((candidate) => candidate.key === event.key);
-      if (!mode) return;
-      event.preventDefault();
-      this.requestEmotionalMode(mode.id);
-    });
+    // Keyboard 1–9 is owned by PlayScene → selectEmotionalMode (not duplicated here).
   }
 
   setCallbacks(callbacks: {
@@ -768,11 +757,10 @@ export class UIManager {
   }
 
   /**
-   * Forward a player inventory choice to the scene. Validity / READY→RESOLVING
-   * transitions are owned by PlayScene, not the UI.
+   * Forward a click on an inventory slot to the scene.
+   * PlayScene.selectEmotionalMode owns READY checks and READY→RESOLVING.
    */
   private requestEmotionalMode(id: EmotionalResponseModeId): void {
-    if (this.emotionalInventoryState !== 'ready') return;
     this.onEmotionalResponseSelected?.(getEmotionalResponseMode(id));
   }
 
