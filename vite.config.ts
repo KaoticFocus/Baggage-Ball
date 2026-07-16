@@ -16,6 +16,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '/api/character-speech',
       },
+      '/.netlify/functions/generate-loadout-line': {
+        target: 'http://localhost:8787',
+        changeOrigin: true,
+        rewrite: () => '/api/generate-loadout-line',
+      },
     },
   },
   build: {

@@ -14,6 +14,7 @@
 export const VOICE_ENV_BY_CHARACTER: Record<string, string> = {
   valentine: 'ELEVENLABS_VOICE_VALENTINE',
   'midlife-dave': 'ELEVENLABS_VOICE_MIDLIFE_DAVE',
+  'player-paddle': 'ELEVENLABS_VOICE_PLAYER',
 };
 
 /** Name of the env var holding the voice id for a character (if supported). */

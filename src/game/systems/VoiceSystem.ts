@@ -1,26 +1,22 @@
 /**
- * Future voice/TTS hooks for Baggage Ball.
- * Not active in the vertical slice — stubs only.
- *
- * Design intent:
- * - Ball dialogue lines are primary speech (speakBallLine).
- * - Response options may be spoken on hover/focus (speakResponseOption).
- * - Opponent barks are optional, lower-priority speech (speakOpponentBark).
+ * Legacy stubs — do not use for character speech.
+ * All character voice goes through VoiceDirector (see src/game/audio/VoiceDirector.ts).
+ * Ball-speed helpers remain for BehaviorModifierSystem.
  */
 
-/** TODO: Wire to browser TTS or cloud voice when voice mode ships. */
+/** @deprecated Use VoiceDirector.speak */
 export function speakBallLine(_text: string): void {
-  // Intentionally empty — DialogueSystem uses VoiceAdapter stub when mode is voice.
+  // No-op — character speech is VoiceDirector-only.
 }
 
-/** TODO: Speak a response option when the player hovers or focuses it. */
+/** @deprecated Use VoiceDirector.speak */
 export function speakResponseOption(_text: string): void {
-  // Intentionally empty.
+  // No-op — character speech is VoiceDirector-only.
 }
 
-/** TODO: Optional lower-priority TTS for opponent bark bubbles. */
+/** @deprecated Use VoiceDirector.speak / speakCharacterLine */
 export function speakOpponentBark(_text: string): void {
-  // Intentionally empty.
+  // No-op — opponent barks speak via PlayScene → speakCharacterLine → VoiceDirector.
 }
 
 export function getBallSpeed(body: { velocity: { x: number; y: number } }): number {

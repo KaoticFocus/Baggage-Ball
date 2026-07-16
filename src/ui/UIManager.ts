@@ -40,6 +40,7 @@ import {
 import {
   EMOTIONAL_RESPONSE_MODES,
   getEmotionalResponseMode,
+  type EmotionalInventoryInteractionState,
   type EmotionalResponseMode,
   type EmotionalResponseModeId,
 } from '../game/data/emotionalResponseModes';
@@ -61,7 +62,6 @@ export class UIManager {
   private opponentBarkBubble = document.getElementById('opponent-bark-bubble')!;
   private onBallSelected?: (ballId: string) => void;
   private ballSelectHandler?: (ballId: string, playerSide: PaddleSide, opponentId: OpponentId) => void;
-  private onResponseSelected?: (index: number) => void;
   private onEmotionalResponseSelected?: (mode: EmotionalResponseMode) => void;
   private onCustomResponseRequested?: () => void;
   private onCustomResponseSubmitted?: (text: string) => void;
@@ -78,6 +78,10 @@ export class UIManager {
   private pauseBanner = document.getElementById('pause-banner')!;
   private debugToastTimer: ReturnType<typeof setTimeout> | null = null;
   private customInputVisible = false;
+  /** Scene-owned interaction state; UIManager only renders it. */
+  private emotionalInventoryState: EmotionalInventoryInteractionState = 'idle';
+  private pendingEmotionalModeId: EmotionalResponseModeId | null = null;
+  private emotionalInventoryRendered = false;
   private canvasBounds: ScreenBounds | null = null;
   private selectedPaddleSide: PaddleSide = getPlayerPaddleSide();
   private selectedOpponentId: OpponentId = getSelectedOpponentId();
@@ -150,21 +154,24 @@ export class UIManager {
 
     this.pauseBtn.addEventListener('click', () => this.onPauseToggle?.());
     document.getElementById('hud-quit-btn')!.addEventListener('click', () => this.onQuit?.());
-    this.renderEmotionalInventory();
+    this.renderEmotionalInventoryOnce();
+    this.setEmotionalInventoryState('idle');
     document.addEventListener('keydown', (event) => {
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      // Space must never auto-select a legacy canned response during inventory use.
+      if (event.key === ' ' || event.code === 'Space') return;
       const target = event.target as HTMLElement | null;
       if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (this.emotionalInventoryState !== 'ready') return;
       const mode = EMOTIONAL_RESPONSE_MODES.find((candidate) => candidate.key === event.key);
       if (!mode) return;
-      this.selectEmotionalResponseMode(mode.id);
       event.preventDefault();
+      this.requestEmotionalMode(mode.id);
     });
   }
 
   setCallbacks(callbacks: {
     onBallSelected?: (ballId: string) => void;
-    onResponseSelected?: (index: number) => void;
     onEmotionalResponseSelected?: (mode: EmotionalResponseMode) => void;
     onCustomResponseRequested?: () => void;
     onCustomResponseSubmitted?: (text: string) => void;
@@ -176,7 +183,6 @@ export class UIManager {
     onQuit?: () => void;
   }): void {
     if (callbacks.onBallSelected !== undefined) this.onBallSelected = callbacks.onBallSelected;
-    if (callbacks.onResponseSelected !== undefined) this.onResponseSelected = callbacks.onResponseSelected;
     if (callbacks.onEmotionalResponseSelected !== undefined) {
       this.onEmotionalResponseSelected = callbacks.onEmotionalResponseSelected;
     }
@@ -715,24 +721,90 @@ export class UIManager {
     return getEmotionalResponseMode(this.selectedEmotionalResponseModeId);
   }
 
-  private selectEmotionalResponseMode(id: EmotionalResponseModeId): void {
-    this.selectedEmotionalResponseModeId = id;
-    this.renderEmotionalInventory();
+  getEmotionalInventoryState(): EmotionalInventoryInteractionState {
+    return this.emotionalInventoryState;
+  }
+
+  /**
+   * Scene-owned state driver. UIManager only renders idle/ready/resolving.
+   * Does not decide whether a response is valid.
+   */
+  setEmotionalInventoryState(state: EmotionalInventoryInteractionState): void {
+    this.emotionalInventoryState = state;
+    this.emotionalInventory.classList.remove(
+      'emotional-inventory--idle',
+      'emotional-inventory--ready',
+      'emotional-inventory--resolving',
+      'emotional-inventory--armed'
+    );
+    this.emotionalInventory.classList.add(`emotional-inventory--${state}`);
+    this.emotionalInventory.setAttribute('aria-busy', state === 'resolving' ? 'true' : 'false');
+    this.refreshEmotionalInventoryAppearance();
+  }
+
+  setPendingEmotionalMode(modeId: EmotionalResponseModeId | null): void {
+    this.pendingEmotionalModeId = modeId;
+    if (modeId) this.selectedEmotionalResponseModeId = modeId;
+    this.refreshEmotionalInventoryAppearance();
+  }
+
+  clearPendingEmotionalMode(): void {
+    this.pendingEmotionalModeId = null;
+    this.refreshEmotionalInventoryAppearance();
+  }
+
+  /**
+   * Forward a player inventory choice to the scene. Validity / READY→RESOLVING
+   * transitions are owned by PlayScene, not the UI.
+   */
+  private requestEmotionalMode(id: EmotionalResponseModeId): void {
+    if (this.emotionalInventoryState !== 'ready') return;
     this.onEmotionalResponseSelected?.(getEmotionalResponseMode(id));
   }
 
-  private renderEmotionalInventory(): void {
+  /** Render the nine inventory buttons once; updates are class/disabled only. */
+  private renderEmotionalInventoryOnce(): void {
+    if (this.emotionalInventoryRendered) return;
+
     const inventory = this.emotionalInventory;
-    inventory.innerHTML = EMOTIONAL_RESPONSE_MODES.map((mode) => `
-      <button type="button" class="emotional-slot${mode.id === this.selectedEmotionalResponseModeId ? ' emotional-slot-selected' : ''}" data-mode-id="${mode.id}" title="${mode.description}">
+    inventory.innerHTML = EMOTIONAL_RESPONSE_MODES.map(
+      (mode) => `
+      <button type="button" class="emotional-slot" data-mode-id="${mode.id}" title="${mode.description}" aria-pressed="false">
         <span class="emotional-slot-key">${mode.key}</span><span class="emotional-slot-label">${mode.label}</span>
       </button>
-    `).join('');
-    inventory.querySelectorAll<HTMLButtonElement>('.emotional-slot').forEach((button) => {
-      button.addEventListener('click', () => {
-        const modeId = button.dataset.modeId as EmotionalResponseModeId | undefined;
-        if (modeId) this.selectEmotionalResponseMode(modeId);
-      });
+    `
+    ).join('');
+
+    inventory.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('.emotional-slot');
+      if (!button || button.disabled) return;
+      const modeId = button.dataset.modeId as EmotionalResponseModeId | undefined;
+      if (!modeId) return;
+      this.requestEmotionalMode(modeId);
+    });
+
+    this.emotionalInventoryRendered = true;
+    this.refreshEmotionalInventoryAppearance();
+  }
+
+  private refreshEmotionalInventoryAppearance(): void {
+    if (!this.emotionalInventoryRendered) return;
+
+    const interactive = this.emotionalInventoryState === 'ready';
+    const buttons = this.emotionalInventory.querySelectorAll<HTMLButtonElement>('.emotional-slot');
+
+    buttons.forEach((button) => {
+      const modeId = button.dataset.modeId as EmotionalResponseModeId | undefined;
+      if (!modeId) return;
+
+      const isSelected = modeId === this.selectedEmotionalResponseModeId;
+      const isPending = modeId === this.pendingEmotionalModeId;
+
+      button.disabled = !interactive;
+      button.setAttribute('aria-disabled', interactive ? 'false' : 'true');
+      button.setAttribute('aria-pressed', isSelected || isPending ? 'true' : 'false');
+      button.classList.toggle('emotional-slot-selected', isSelected && !isPending);
+      button.classList.toggle('emotional-slot-pending', isPending);
     });
   }
 
@@ -763,6 +835,7 @@ export class UIManager {
         height: rect.height,
       },
       className: this.emotionalInventory.className,
+      state: this.emotionalInventoryState,
       computedDisplay: computed.display,
       computedVisibility: computed.visibility,
       computedZIndex: computed.zIndex,
@@ -773,12 +846,16 @@ export class UIManager {
   }
 
   private showEmotionalInventory(): void {
+    this.renderEmotionalInventoryOnce();
     this.emotionalInventory.classList.remove('hidden');
     this.emotionalInventory.classList.toggle('emotional-inventory-dev-probe', import.meta.env.DEV);
+    this.setEmotionalInventoryState(this.emotionalInventoryState);
     requestAnimationFrame(() => this.logEmotionalInventoryLayout());
   }
 
   private hideEmotionalInventory(): void {
+    this.clearPendingEmotionalMode();
+    this.setEmotionalInventoryState('idle');
     this.emotionalInventory.classList.add('hidden');
   }
 
@@ -805,24 +882,47 @@ export class UIManager {
     document.getElementById('player-response-echo')!.classList.add('hidden');
     this.updateBallMeta(hoverType, mood);
 
-    const choices = document.getElementById('response-choices')!;
-    choices.innerHTML = '';
-    event.responses.forEach((response, i) => {
-      const btn = document.createElement('button');
-      btn.className = 'response-btn';
-      btn.innerHTML = `<span class="response-key">${i + 1}</span>${response.text}`;
-      btn.addEventListener('click', () => this.onResponseSelected?.(i));
-      choices.appendChild(btn);
-    });
-
-    const customBtn = document.createElement('button');
-    customBtn.className = 'response-btn response-btn-custom';
-    customBtn.innerHTML = `<span class="response-key">✎</span>Type my own response`;
-    customBtn.addEventListener('click', () => this.showCustomInput());
-    choices.appendChild(customBtn);
-
+    // Intentionally do not render event.responses as numbered buttons.
+    // Legacy response data remains on the event for internal use only.
+    this.renderDialogueResponsePaths();
     this.hideCustomInputArea();
     requestAnimationFrame(() => this.positionDialogueCluster(false));
+  }
+
+  /**
+   * Dialogue responses are Emotional Inventory (1–9) or Custom Response only.
+   * Preset canned-response buttons are not rendered.
+   */
+  private renderDialogueResponsePaths(): void {
+    const choices = document.getElementById('response-choices')!;
+    choices.classList.remove('hidden');
+    choices.innerHTML = '';
+
+    const hint = document.createElement('p');
+    hint.className = 'response-hint';
+    hint.textContent = 'Choose an emotional response below.';
+    choices.appendChild(hint);
+
+    const paths = document.createElement('div');
+    paths.className = 'response-paths';
+
+    const inventoryPath = document.createElement('div');
+    inventoryPath.className = 'response-path response-path-inventory';
+    inventoryPath.innerHTML =
+      '<span class="response-path-label">Emotional Inventory</span>' +
+      '<span class="response-path-detail">Press or click 1–9</span>';
+    paths.appendChild(inventoryPath);
+
+    const customBtn = document.createElement('button');
+    customBtn.type = 'button';
+    customBtn.className = 'response-path response-path-custom';
+    customBtn.innerHTML =
+      '<span class="response-path-label">Custom Response</span>' +
+      '<span class="response-path-detail">Type your own reply</span>';
+    customBtn.addEventListener('click', () => this.showCustomInput());
+    paths.appendChild(customBtn);
+
+    choices.appendChild(paths);
   }
 
   showCustomInput(): void {

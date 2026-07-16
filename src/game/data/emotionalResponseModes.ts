@@ -72,6 +72,31 @@ export function getEmotionalResponseMode(id: EmotionalResponseModeId): Emotional
   return EMOTIONAL_RESPONSE_MODES.find((mode) => mode.id === id) ?? EMOTIONAL_RESPONSE_MODES[0];
 }
 
+/**
+ * Interaction states for the Emotional Inventory HUD.
+ * Scene owns validity; UIManager only renders these states.
+ */
+export type EmotionalInventoryInteractionState = 'idle' | 'ready' | 'resolving';
+
+/**
+ * Map the ball whose emotional stats are being modified to the character
+ * override set. Do NOT derive this from the opponent id — opponent presence
+ * does not own the ball's relationship stats.
+ *
+ * Current mapping:
+ * - valentine → valentine overrides
+ * - all other balls → default
+ *
+ * midlifeDave is reserved for a future system where Dave owns the stats
+ * being modified; do not apply Dave overrides merely because he is opponent.
+ */
+export function getEmotionalResponseCharacterIdForBall(
+  ballId: string
+): EmotionalResponseCharacterId {
+  if (ballId === 'valentine') return 'valentine';
+  return 'default';
+}
+
 export function getEmotionalResponseEffects(
   id: EmotionalResponseModeId,
   characterId: EmotionalResponseCharacterId,

@@ -22,6 +22,11 @@ import {
   parseValentineVoiceRequest,
 } from './valentineVoiceCore.js';
 
+import {
+  handleGenerateLoadoutLineRequest,
+  parseGenerateLoadoutLineRequest,
+} from './generateLoadoutLineCore.js';
+
 const PORT = Number(process.env.LOCAL_AI_PORT ?? 8787);
 const MODEL = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -184,6 +189,17 @@ app.post('/api/character-speech', async (req, res) => {
   }
 
   const result = await handleCharacterSpeechRequest(request);
+  res.status(result.ok ? 200 : 503).json(result);
+});
+
+app.post('/api/generate-loadout-line', async (req, res) => {
+  const request = parseGenerateLoadoutLineRequest(req.body);
+  if (!request) {
+    res.status(400).json({ ok: false, error: 'Invalid request body' });
+    return;
+  }
+
+  const result = await handleGenerateLoadoutLineRequest(request);
   res.status(result.ok ? 200 : 503).json(result);
 });
 
