@@ -47,7 +47,6 @@ import {
 import type { EmotionalActionState } from '../game/data/emotionalActionConfig';
 
 const OPPONENT_BARK_DISPLAY_MS = 6400;
-const OPPONENT_BARK_FADE_MS = 500;
 const BALL_COMMENT_SCORE_HUD_CLEARANCE_PX = 96;
 const BALL_COMMENT_PLAYFIELD_PADDING_PX = 12;
 
@@ -98,8 +97,6 @@ export class UIManager {
   private matchCountdown = document.getElementById('match-countdown')!;
   private pointFlash = document.getElementById('point-flash')!;
   private ballComment = document.getElementById('ball-comment')!;
-  private ballCommentSpeaker = document.getElementById('ball-comment-speaker')!;
-  private ballCommentText = document.getElementById('ball-comment-text')!;
   private ballCommentTimer: ReturnType<typeof setTimeout> | null = null;
   private activeBallId = 'orb';
   private playfieldScreenBounds: ScreenBounds | null = null;
@@ -473,7 +470,7 @@ export class UIManager {
     }
   }
 
-  showMenu(): void {
+  showMenu(options?: { focusOpponent?: boolean }): void {
     this.renderBallSelect();
     this.renderOpponentSelect();
     this.menuOverlay.classList.remove('hidden');
@@ -481,17 +478,31 @@ export class UIManager {
     this.statsPanel.classList.add('hidden');
     this.hideEmotionalInventory();
     this.dialogueOverlay.classList.add('hidden');
-    this.recapOverlay.classList.add('hidden');
+    this.hideMatchRecap();
     this.hideMatchOverlays();
     this.hideOutburst();
     this.hideOpponentBark();
+    this.hideBallComment();
+    this.hideSpeechCaption();
+    if (options?.focusOpponent) {
+      requestAnimationFrame(() => {
+        document.querySelector('.opponent-select-section')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        });
+      });
+    }
+  }
+
+  hideMatchRecap(): void {
+    this.recapOverlay.classList.add('hidden');
   }
 
   showPlaying(ballId: string, ballName: string, opponentName: string, opponentShortName: string): void {
     this.activeBallId = ballId;
     this.applyBallCommentTheme();
     this.menuOverlay.classList.add('hidden');
-    this.recapOverlay.classList.add('hidden');
+    this.hideMatchRecap();
     this.hud.classList.remove('hidden');
     this.statsPanel.classList.remove('hidden');
     this.statsPanel.classList.toggle('stats-panel--orb', ballId === 'orb');
@@ -952,24 +963,14 @@ export class UIManager {
     submitBtn.disabled = false;
   }
 
-  showValentineThinking(message = 'Valentine is thinking', ballScreen?: { x: number; y: number }): void {
-    this.ballCommentSpeaker.textContent = 'VALENTINE';
-    this.ballCommentText.textContent = this.stripTrailingEllipsis(message);
-    this.applyBallCommentTheme();
-    this.ballComment.classList.remove('hidden');
-    this.ballComment.classList.add('ball-comment--thinking');
-    if (this.ballCommentTimer) {
-      clearTimeout(this.ballCommentTimer);
-      this.ballCommentTimer = null;
-    }
-    this.lastBallCommentScreen = ballScreen ?? null;
-    this.repositionBallComment();
+  showValentineThinking(message = 'Valentine is thinking', _ballScreen?: { x: number; y: number }): void {
+    // Captions only — no playfield thinking bubble.
+    this.hideBallComment();
+    this.showSpeechCaption('Valentine', this.stripTrailingEllipsis(message), 4200);
   }
 
   setValentineThinkingMessage(message: string): void {
-    if (this.ballComment.classList.contains('hidden')) return;
-    this.ballCommentText.textContent = this.stripTrailingEllipsis(message);
-    this.repositionBallComment();
+    this.showSpeechCaption('Valentine', this.stripTrailingEllipsis(message), 4200);
   }
 
   clearValentineThinking(): void {
@@ -981,20 +982,15 @@ export class UIManager {
   }
 
   showValentineHoverResult(emotionalResult: string, playerEcho?: string): void {
-    document.getElementById('response-panel')!.classList.add('hidden');
-    document.getElementById('ball-reaction')!.classList.add('hidden');
-    document.getElementById('hover-banner')!.classList.add('hidden');
-
-    if (playerEcho) {
-      const echo = document.getElementById('player-response-echo')!;
-      echo.textContent = `You: "${truncateHoverText(playerEcho, 100)}"`;
-      echo.classList.remove('hidden');
-    }
-
-    const resultEl = document.getElementById('emotional-result')!;
-    resultEl.textContent = emotionalResult;
-    resultEl.classList.remove('hidden');
-    requestAnimationFrame(() => this.positionDialogueCluster(false));
+    this.dialogueOverlay.classList.add('hidden');
+    const line = playerEcho
+      ? `${truncateHoverText(playerEcho, 80)} → ${truncateHoverText(emotionalResult, 100)}`
+      : truncateHoverText(emotionalResult, 140);
+    this.showSpeechCaption(
+      document.getElementById('hud-ball-name')?.textContent?.trim() || 'Valentine',
+      line,
+      3600
+    );
   }
 
   showCustomInputProcessing(): void {
@@ -1008,24 +1004,17 @@ export class UIManager {
   }
 
   showReaction(reaction: string, emotionalResult?: string, playerEcho?: string): void {
-    document.getElementById('response-panel')!.classList.add('hidden');
-
-    if (playerEcho) {
-      const echo = document.getElementById('player-response-echo')!;
-      echo.textContent = `You: "${truncateHoverText(playerEcho, 100)}"`;
-      echo.classList.remove('hidden');
-    }
-    document.getElementById('ball-reaction')!.textContent = truncateHoverText(reaction, 140);
-    document.getElementById('ball-reaction')!.classList.remove('hidden');
-    document.getElementById('hover-banner')!.classList.add('hidden');
-
-    const resultEl = document.getElementById('emotional-result')!;
-    if (emotionalResult) {
-      resultEl.textContent = emotionalResult;
-      resultEl.classList.remove('hidden');
-    }
-
-    requestAnimationFrame(() => this.positionDialogueCluster(false));
+    this.dialogueOverlay.classList.add('hidden');
+    const parts = [
+      playerEcho ? `You: ${truncateHoverText(playerEcho, 70)}` : '',
+      truncateHoverText(reaction, 120),
+      emotionalResult ? truncateHoverText(emotionalResult, 80) : '',
+    ].filter(Boolean);
+    this.showSpeechCaption(
+      document.getElementById('hud-ball-name')?.textContent?.trim() || 'Ball',
+      parts.join(' · '),
+      3800
+    );
   }
 
   hideDialogue(): void {
@@ -1041,55 +1030,32 @@ export class UIManager {
 
   showOpponentBark(
     result: BarkResult,
-    layoutInput: OpponentBarkLayoutInput
+    _layoutInput: OpponentBarkLayoutInput
   ): void {
-    document.getElementById('opponent-bark-name')!.textContent = result.displayName;
-    document.getElementById('opponent-bark-text')!.textContent = truncateHoverText(result.text, 120);
-    this.opponentBarkBubble.classList.remove('opponent-bark-fading');
-    this.opponentBarkBubble.style.opacity = '';
-
-    const visible = this.positionOpponentBark(layoutInput, true);
-    if (!visible) {
-      this.hideOpponentBark();
-      return;
-    }
-    this.opponentBarkBubble.classList.remove('hidden');
-
-    if (this.opponentBarkTimer) clearTimeout(this.opponentBarkTimer);
-    if (this.opponentBarkFadeTimer) clearTimeout(this.opponentBarkFadeTimer);
-
-    console.log(`[Opponent Bark] displayMs=${OPPONENT_BARK_DISPLAY_MS}`);
-
-    this.opponentBarkFadeTimer = setTimeout(() => {
-      this.opponentBarkBubble.classList.add('opponent-bark-fading');
-    }, OPPONENT_BARK_DISPLAY_MS - OPPONENT_BARK_FADE_MS);
-
-    this.opponentBarkTimer = setTimeout(() => this.hideOpponentBark(), OPPONENT_BARK_DISPLAY_MS);
+    // Captions only during rally — no playfield thought-bubble overlay.
+    this.hideOpponentBark();
+    this.showSpeechCaption(
+      result.displayName,
+      truncateHoverText(result.text, 140),
+      OPPONENT_BARK_DISPLAY_MS
+    );
   }
 
   /**
-   * Re-time the opponent bark bubble once audio duration is known so it honours
-   * max(5000ms, audio duration + 300ms). Ignored if the bubble is hidden or if
-   * a different bark is now showing (guarded by the expected text).
+   * Re-time the opponent caption once audio duration is known.
+   * Legacy bark bubble stays hidden.
    */
   setOpponentBarkDisplayDuration(displayMs: number, expectedText?: string): void {
-    if (this.opponentBarkBubble.classList.contains('hidden')) return;
-
     if (expectedText !== undefined) {
-      const currentText = document.getElementById('opponent-bark-text')?.textContent ?? '';
-      if (currentText !== truncateHoverText(expectedText, 120)) return;
+      const current = this.speechCaptionText.textContent ?? '';
+      if (current !== truncateHoverText(expectedText, 140) && current !== expectedText) {
+        return;
+      }
     }
-
-    if (this.opponentBarkTimer) clearTimeout(this.opponentBarkTimer);
-    if (this.opponentBarkFadeTimer) clearTimeout(this.opponentBarkFadeTimer);
-    this.opponentBarkBubble.classList.remove('opponent-bark-fading');
-    this.opponentBarkBubble.style.opacity = '';
-
-    this.opponentBarkFadeTimer = setTimeout(() => {
-      this.opponentBarkBubble.classList.add('opponent-bark-fading');
-    }, Math.max(0, displayMs - OPPONENT_BARK_FADE_MS));
-
-    this.opponentBarkTimer = setTimeout(() => this.hideOpponentBark(), displayMs);
+    const speaker = this.speechCaptionSpeaker.textContent?.trim() || 'Opponent';
+    const text = this.speechCaptionText.textContent?.trim();
+    if (!text) return;
+    this.showSpeechCaption(speaker, text, Math.max(displayMs, OPPONENT_BARK_DISPLAY_MS));
   }
 
   updateOpponentBarkPosition(layoutInput: OpponentBarkLayoutInput): void {
@@ -1180,10 +1146,18 @@ export class UIManager {
     this.statsPanel.classList.add('hidden');
     this.hideEmotionalInventory();
     this.dialogueOverlay.classList.add('hidden');
-    this.recapOverlay.classList.remove('hidden');
     this.hideMatchOverlays();
     this.hideOutburst();
     this.hideOpponentBark();
+    this.hideBallComment();
+    this.hideSpeechCaption();
+    this.menuOverlay.classList.add('hidden');
+    this.recapOverlay.classList.remove('hidden');
+    // Ensure the action row is reachable even when the diagnosis text is long.
+    requestAnimationFrame(() => {
+      const actions = this.recapOverlay.querySelector('.match-recap-actions');
+      actions?.scrollIntoView({ block: 'nearest' });
+    });
 
     if (callbacks.onRematch !== undefined) this.onRecapRematch = callbacks.onRematch;
     if (callbacks.onChangeBall !== undefined) this.onRecapChangeBall = callbacks.onChangeBall;

@@ -6,7 +6,7 @@ export class MenuScene extends Phaser.Scene {
     super({ key: 'MenuScene' });
   }
 
-  create(): void {
-    uiManager.showMenu();
+  create(data?: { focusOpponent?: boolean }): void {
+    uiManager.showMenu({ focusOpponent: Boolean(data?.focusOpponent) });
   }
 }

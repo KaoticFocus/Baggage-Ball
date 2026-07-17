@@ -710,15 +710,14 @@ export class PlayScene extends Phaser.Scene {
 
   private endMatch(): void {
     this.gameState = 'matchEnd';
-    this.setEmotionalActionState('disabled');
-    this.currentEmotionalActionId = null;
-    this.emotionalLoadoutController?.cancel();
+    this.cleanupActiveMatchSystems();
     this.serveLock = true;
     this.ballBody.setVelocity(0, 0);
     this.time.timeScale = 1;
+    if (this.time.paused) this.time.paused = false;
+    if (this.physics.world.isPaused) this.physics.resume();
     uiManager.hidePointFlash();
     uiManager.hideMatchOverlays();
-    uiManager.hideSpeechCaption();
 
     const winner = this.matchSystem.getWinner();
     if (!winner) return;
@@ -734,16 +733,12 @@ export class PlayScene extends Phaser.Scene {
     );
 
     const showRecap = (): void => {
+      if (this.sceneTeardown) return;
       uiManager.showMatchRecap(recap, {
-        onRematch: () =>
-          this.scene.restart({
-            ballId: this.ballId,
-            playerSide: this.playerSide,
-            opponentId: this.opponentId,
-          }),
-        onChangeBall: () => this.scene.start('MenuScene'),
-        onChangeOpponent: () => this.scene.start('MenuScene'),
-        onMainMenu: () => this.scene.start('MenuScene'),
+        onRematch: () => this.handleRecapRematch(),
+        onChangeBall: () => this.handleRecapChangeBall(),
+        onChangeOpponent: () => this.handleRecapChangeOpponent(),
+        onMainMenu: () => this.handleRecapMainMenu(),
       });
     };
 
@@ -755,6 +750,58 @@ export class PlayScene extends Phaser.Scene {
     showRecap();
   }
 
+  /**
+   * Stop in-flight combat/audio/UI so match-end navigation cannot be blocked
+   * by beams, VoiceDirector, captions, or leftover DOM layers.
+   */
+  private cleanupActiveMatchSystems(): void {
+    this.setEmotionalActionState('disabled');
+    this.pendingEmotionalResolution = null;
+    this.currentEmotionalActionId = null;
+    this.emotionalCooldownUntil = 0;
+    voiceDirector.setCurrentInteractionId(null);
+    this.emotionalLoadoutController?.cancel();
+    this.emotionalDelivery?.hardReset();
+    this.stopValentineThinking();
+    stopValentineSpeech();
+    stopCharacterSpeech();
+    voiceDirector.stopAll();
+    uiManager.hideSpeechCaption();
+    uiManager.hideBallComment();
+    uiManager.hideOpponentBark();
+    uiManager.hideDialogue();
+    uiManager.hideOutburst();
+    uiManager.clearPendingEmotionalMode();
+    uiManager.setEmotionalCooldownProgress(0);
+  }
+
+  private handleRecapRematch(): void {
+    const ballId = this.ballId;
+    const playerSide = this.playerSide;
+    const opponentId = this.opponentId;
+    this.cleanupActiveMatchSystems();
+    uiManager.hideMatchRecap();
+    this.scene.restart({ ballId, playerSide, opponentId });
+  }
+
+  private handleRecapChangeBall(): void {
+    this.cleanupActiveMatchSystems();
+    uiManager.hideMatchRecap();
+    this.scene.start('MenuScene');
+  }
+
+  private handleRecapChangeOpponent(): void {
+    this.cleanupActiveMatchSystems();
+    uiManager.hideMatchRecap();
+    this.scene.start('MenuScene', { focusOpponent: true });
+  }
+
+  private handleRecapMainMenu(): void {
+    this.cleanupActiveMatchSystems();
+    uiManager.hideMatchRecap();
+    this.scene.start('MenuScene');
+  }
+
   private async finishValentineEndMatch(showRecap: () => void): Promise<void> {
     try {
       await Promise.race([
@@ -762,7 +809,7 @@ export class PlayScene extends Phaser.Scene {
         this.waitRealMs(4000),
       ]);
     } finally {
-      uiManager.hideBallComment();
+      this.cleanupActiveMatchSystems();
       showRecap();
     }
   }
@@ -2171,8 +2218,8 @@ export class PlayScene extends Phaser.Scene {
 
   private quitToMenu(): void {
     this.fireOpponentBark('quitPressed');
+    this.cleanupActiveMatchSystems();
     this.resetEmotionalInventoryInteraction();
-    this.stopValentineThinking();
 
     if (this.isPaused) {
       this.time.paused = false;
@@ -2184,10 +2231,8 @@ export class PlayScene extends Phaser.Scene {
 
     this.time.timeScale = 1;
     this.hoverMorph.forceRestore();
-    uiManager.hideDialogue();
-    uiManager.hideOutburst();
-    uiManager.hideOpponentBark();
     uiManager.hideMatchOverlays();
+    uiManager.hideMatchRecap();
     uiManager.resetGameControls();
     this.scene.start('MenuScene');
   }

@@ -52,13 +52,13 @@ const OUTBURST_LABELS: Partial<Record<BehaviorModifier, string>> = {
   speedUp: 'Speed surge!',
 };
 
-/** Rally speed tuning — serve ~330–380, cap ~780. */
+/** Rally speed tuning — serve ~220–260, accelerates on hits, hard cap ~700. */
 export const BALL_SPEED = {
-  BASE: 360,
-  SERVE_FACTOR: 0.92,
-  PER_HIT_MULTIPLIER: 1.055,
-  MIN: 220,
-  MAX: 780,
+  BASE: 290,
+  SERVE_FACTOR: 0.78,
+  PER_HIT_MULTIPLIER: 1.05,
+  MIN: 200,
+  MAX: 700,
 } as const;
 
 /** @deprecated Use BALL_SPEED.BASE */

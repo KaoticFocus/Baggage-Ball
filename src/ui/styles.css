@@ -104,6 +104,15 @@ body {
   pointer-events: auto;
 }
 
+/* Recap must sit above captions/stats/barks and remain scrollable so actions stay clickable. */
+#recap-overlay {
+  z-index: 50;
+}
+
+#recap-overlay:not(.hidden) {
+  pointer-events: auto;
+}
+
 .overlay > * {
   pointer-events: auto;
 }
@@ -1577,11 +1586,33 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   background: rgba(5, 5, 8, 0.94);
   backdrop-filter: blur(8px);
-  padding: 2rem;
+  padding: 2rem 2rem 1.25rem;
   text-align: center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.match-recap-content .match-recap-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  width: min(100%, 560px);
+  margin-top: auto;
+  padding: 0.85rem 0 0.25rem;
+  background: linear-gradient(to top, rgba(5, 5, 8, 0.98) 55%, rgba(5, 5, 8, 0));
+  pointer-events: auto;
+}
+
+.match-recap-content .match-recap-actions .btn-primary,
+.match-recap-content .match-recap-actions .btn-secondary {
+  pointer-events: auto;
+  position: relative;
+  z-index: 1;
 }
 
 .recap-content h2 {

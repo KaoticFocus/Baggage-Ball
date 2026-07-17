@@ -30,15 +30,26 @@ export class RecapScene extends Phaser.Scene {
     );
 
     uiManager.showMatchRecap(recap, {
-      onRematch: () =>
+      onRematch: () => {
+        uiManager.hideMatchRecap();
         this.scene.start('PlayScene', {
           ballId: data.ballId,
           playerSide: getPlayerPaddleSide(),
           opponentId: getSelectedOpponentId(),
-        }),
-      onChangeBall: () => this.scene.start('MenuScene'),
-      onChangeOpponent: () => this.scene.start('MenuScene'),
-      onMainMenu: () => this.scene.start('MenuScene'),
+        });
+      },
+      onChangeBall: () => {
+        uiManager.hideMatchRecap();
+        this.scene.start('MenuScene');
+      },
+      onChangeOpponent: () => {
+        uiManager.hideMatchRecap();
+        this.scene.start('MenuScene', { focusOpponent: true });
+      },
+      onMainMenu: () => {
+        uiManager.hideMatchRecap();
+        this.scene.start('MenuScene');
+      },
     });
   }
 }
