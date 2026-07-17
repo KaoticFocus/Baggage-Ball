@@ -16,7 +16,7 @@ import {
   type EmotionalDeliveryStyle,
   type EmotionalDeliveryTiming,
 } from '../data/emotionalDeliveryConfig';
-import type { PlayfieldRect } from '../layout/GameLayout';
+import { GAME_LAYOUT, getLoadoutStackX, type PlayfieldRect } from '../layout/GameLayout';
 import type { PaddleSide } from '../settings/PlayerSettings';
 
 const DEPTH = {
@@ -351,20 +351,17 @@ export class EmotionalDeliverySystem {
 
     const pf = this.playfield;
     const count = EMOTIONAL_RESPONSE_MODES.length;
-    const topPad = 10;
-    const bottomPad = 10;
+    const topPad = 14;
+    const bottomPad = 14;
     const availableH = pf.height - topPad - bottomPad;
     const gap = 3;
-    const slotH = Math.max(28, Math.min(42, (availableH - gap * (count - 1)) / count));
-    const slotW = Math.min(72, Math.max(56, pf.paddleSafeZoneWidth - 36));
+    const slotH = Math.max(28, Math.min(40, (availableH - gap * (count - 1)) / count));
+    const slotW = GAME_LAYOUT.LOADOUT_SLOT_WIDTH;
     const stackH = count * slotH + (count - 1) * gap;
     const startY = pf.top + topPad + (availableH - stackH) / 2 + slotH / 2;
 
-    // Fixed in the player paddle lane (playfield X of the paddle). Does not follow paddle Y.
-    const stackX =
-      this.playerSide === 'left'
-        ? pf.left + pf.paddleInset
-        : pf.right - pf.paddleInset;
+    // Outer rack: wall → Loadout → paddle → court. Fixed X; does not follow paddle Y.
+    const stackX = getLoadoutStackX(this.playerSide, pf);
 
     this.stackRoot = this.scene.add.container(0, 0).setDepth(DEPTH.stack);
 

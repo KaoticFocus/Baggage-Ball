@@ -439,6 +439,9 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private drawHudGutter(): void {
+    // Right stats gutter retired — bottom HUD owns ball stats. No sidebar band.
+    if (this.playfield.rightHudWidth <= 0) return;
+
     const { height } = this.scale;
     const hudCenterX = this.playfield.rightHudLeft + this.playfield.rightHudWidth / 2;
 
@@ -455,14 +458,11 @@ export class PlayScene extends Phaser.Scene {
   private syncUILayout(): void {
     const bounds = this.getCanvasScreenBounds();
     uiManager.setCanvasBounds(bounds);
-    const canvasScreenWidth = bounds.right - bounds.left;
-    const compactStats =
-      canvasScreenWidth < GAME_LAYOUT.NARROW_CANVAS_PX && this.shouldCompactStatsPanel();
     uiManager.syncPlayfieldLayout(
       bounds,
       this.playfield,
       { width: this.scale.width, height: this.scale.height },
-      { compactStats, playerSide: this.playerSide }
+      { playerSide: this.playerSide }
     );
     this.repositionOpponentBarkIfVisible();
   }
@@ -470,15 +470,6 @@ export class PlayScene extends Phaser.Scene {
   private repositionOpponentBarkIfVisible(): void {
     if (this.opponentBarkBubbleIsHidden()) return;
     uiManager.updateOpponentBarkPosition(this.buildOpponentBarkLayoutInput());
-  }
-
-  private shouldCompactStatsPanel(): boolean {
-    if (this.isPaused) return false;
-    return (
-      this.gameState === 'playing' ||
-      this.gameState === 'countdown' ||
-      this.gameState === 'pointBreak'
-    );
   }
 
   private drawPlayfieldBorder(): void {

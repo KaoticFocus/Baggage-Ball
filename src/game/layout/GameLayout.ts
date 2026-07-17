@@ -5,16 +5,27 @@ export const GAME_LAYOUT = {
   PLAYFIELD_MARGIN_LEFT: 20,
   PLAYFIELD_MARGIN_RIGHT: 20,
   PLAYFIELD_MARGIN_TOP: 20,
-  PLAYFIELD_MARGIN_BOTTOM: 100,
-  /** Reserved right sidebar for stats — not part of the active court. */
-  RIGHT_HUD_PANEL_WIDTH: 200,
+  /** Bottom court margin — DOM bottom stats sit outside the FIT canvas. */
+  PLAYFIELD_MARGIN_BOTTOM: 36,
+  /**
+   * Former right stats gutter. Stats live in the bottom HUD now; keep 0 so the
+   * court (and player-side Loadout rack) are not shoved into a sidebar band.
+   */
+  RIGHT_HUD_PANEL_WIDTH: 0,
   STATS_PANEL_WIDTH: 180,
   STATS_PANEL_GAP: 10,
   STATS_PANEL_TOP_OFFSET: 72,
-  PADDLE_INSET: 24,
+  /**
+   * Distance from playfield outer edge to paddle center.
+   * Large enough for a Loadout rack between the wall and the paddle body.
+   */
+  PADDLE_INSET: 88,
   PADDLE_SAFE_ZONE_WIDTH: 120,
   PADDLE_THICKNESS: 14,
   PADDLE_LENGTH: 96,
+  /** Outer wall → Loadout slot center. */
+  LOADOUT_WALL_GAP: 8,
+  LOADOUT_SLOT_WIDTH: 56,
   SIDE_MISS_MARGIN: 42,
   /** Collapse stats into a tab when canvas is narrower than this (screen px). */
   NARROW_CANVAS_PX: 560,
@@ -65,6 +76,18 @@ export function getSidePaddleX(side: 'left' | 'right', playfield: PlayfieldRect)
   return side === 'left'
     ? playfield.left + playfield.paddleInset
     : playfield.right - playfield.paddleInset;
+}
+
+/**
+ * Fixed Loadout rack X — between the outer wall and the paddle, never on the HUD.
+ * Wall ← Loadout ← Paddle ← court
+ */
+export function getLoadoutStackX(side: 'left' | 'right', playfield: PlayfieldRect): number {
+  const half = GAME_LAYOUT.LOADOUT_SLOT_WIDTH / 2;
+  const gap = GAME_LAYOUT.LOADOUT_WALL_GAP;
+  return side === 'left'
+    ? playfield.left + gap + half
+    : playfield.right - gap - half;
 }
 
 export function getPlayfieldCenterX(playfield: PlayfieldRect): number {

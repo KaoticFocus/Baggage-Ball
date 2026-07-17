@@ -281,40 +281,30 @@ export class UIManager {
     canvasBounds: ScreenBounds,
     playfield: PlayfieldRect,
     gameSize: { width: number; height: number },
-    options: { compactStats: boolean; playerSide: PaddleSide }
+    options: { playerSide: PaddleSide }
   ): void {
     this.gameSize = gameSize;
     this.layoutPlayerSide = options.playerSide;
     const scaleX = (canvasBounds.right - canvasBounds.left) / gameSize.width;
     const scaleY = (canvasBounds.bottom - canvasBounds.top) / gameSize.height;
 
-    const hudLeft =
-      canvasBounds.left +
-      playfield.rightHudLeft * scaleX +
-      GAME_LAYOUT.STATS_PANEL_GAP * scaleX;
-    const hudTop = Math.max(
-      // Keep stats below the top control row (min 36px hit area + gap).
-      12 + 36 + 8,
-      canvasBounds.top + (playfield.top + GAME_LAYOUT.STATS_PANEL_TOP_OFFSET) * scaleY
-    );
-    const panelWidth = GAME_LAYOUT.STATS_PANEL_WIDTH * scaleX;
-
-    this.statsPanel.style.left = `${hudLeft}px`;
-    this.statsPanel.style.top = `max(var(--hud-top-inset), ${hudTop}px)`;
+    // Bottom stats strip: centered under the canvas, shell padding reserves the band.
+    const canvasWidth = canvasBounds.right - canvasBounds.left;
+    this.statsPanel.style.left = `${canvasBounds.left}px`;
+    this.statsPanel.style.width = `${canvasWidth}px`;
     this.statsPanel.style.right = 'auto';
-    this.statsPanel.style.width = `${panelWidth}px`;
-    this.statsPanel.classList.toggle('stats-panel--compact', options.compactStats);
+    this.statsPanel.style.top = 'auto';
+    this.statsPanel.style.bottom = 'max(8px, env(safe-area-inset-bottom, 0px))';
 
     if (this.hudControlsEl) {
-      // Right HUD column + canvas-relative offset, clamped into the visible shell.
-      // Stay clear of the centered scoreboard when the FIT canvas shrinks.
-      let controlsLeft = hudLeft;
+      // Top-right of the canvas, clear of the centered scoreboard.
+      const controlsWidth = this.hudControlsEl.offsetWidth || 220;
+      let controlsLeft = canvasBounds.right - controlsWidth - 8;
       const scoreboard = document.querySelector('.hud-top') as HTMLElement | null;
       if (scoreboard) {
         const scoreRight = scoreboard.getBoundingClientRect().right;
         controlsLeft = Math.max(controlsLeft, scoreRight + 8);
       }
-      const controlsWidth = this.hudControlsEl.offsetWidth || 220;
       controlsLeft = Math.min(controlsLeft, Math.max(8, window.innerWidth - controlsWidth - 8));
 
       this.hudControlsEl.style.right = 'auto';
@@ -488,6 +478,7 @@ export class UIManager {
     this.renderOpponentSelect();
     this.menuOverlay.classList.remove('hidden');
     this.hud.classList.add('hidden');
+    this.statsPanel.classList.add('hidden');
     this.hideEmotionalInventory();
     this.dialogueOverlay.classList.add('hidden');
     this.recapOverlay.classList.add('hidden');
@@ -502,6 +493,10 @@ export class UIManager {
     this.menuOverlay.classList.add('hidden');
     this.recapOverlay.classList.add('hidden');
     this.hud.classList.remove('hidden');
+    this.statsPanel.classList.remove('hidden');
+    this.statsPanel.classList.toggle('stats-panel--orb', ballId === 'orb');
+    this.statsPanel.classList.toggle('stats-panel--bolt', ballId === 'bolt');
+    this.statsPanel.classList.toggle('stats-panel--valentine', ballId === 'valentine');
     this.showEmotionalInventory();
     this.hideMatchOverlays();
     this.resetGameControls();
@@ -710,8 +705,14 @@ export class UIManager {
 
   updateStats(stats: BallStats): void {
     for (const key of STAT_KEYS) {
+      const value = Math.max(0, Math.min(100, stats[key]));
       const el = document.getElementById(`stat-${key}`);
-      if (el) el.style.width = `${stats[key]}%`;
+      if (el) {
+        el.style.height = `${value}%`;
+        el.style.width = '100%';
+      }
+      const valueEl = document.getElementById(`stat-${key}-value`);
+      if (valueEl) valueEl.textContent = String(Math.round(value));
     }
   }
 
@@ -1176,6 +1177,7 @@ export class UIManager {
     }
   ): void {
     this.hud.classList.add('hidden');
+    this.statsPanel.classList.add('hidden');
     this.hideEmotionalInventory();
     this.dialogueOverlay.classList.add('hidden');
     this.recapOverlay.classList.remove('hidden');

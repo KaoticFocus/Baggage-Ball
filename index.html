@@ -39,24 +39,57 @@
         <button id="hud-quit-btn" type="button" class="hud-btn hud-btn-quit">Quit</button>
       </div>
       <div id="pause-banner" class="pause-banner hidden">PAUSED</div>
-      <div id="stats-panel" class="stats-panel">
-        <span class="stats-panel-tab">Stats</span>
+    </div>
+
+    <!-- Bottom ball-stats HUD (vertical bars). Outside FIT canvas; shell reserves space. -->
+    <div id="stats-panel" class="stats-panel stats-panel--bottom hidden" aria-label="Ball stats">
+      <div class="stats-panel-identity">
         <h3 id="stats-ball-name">Ball</h3>
-        <div class="hud-meta">
-          <span class="label">HOVER</span>
-          <span id="hud-hover-type">—</span>
-        </div>
-        <div class="hud-meta">
+        <div class="stats-panel-mood">
           <span class="label">MOOD</span>
           <span id="hud-mood">Volatile</span>
         </div>
-        <div class="stat-row"><span>Trust</span><div class="stat-bar"><div id="stat-trust" class="stat-fill trust"></div></div></div>
-        <div class="stat-row"><span>Resentment</span><div class="stat-bar"><div id="stat-resentment" class="stat-fill resentment"></div></div></div>
-        <div class="stat-row"><span>Ego</span><div class="stat-bar"><div id="stat-ego" class="stat-fill ego"></div></div></div>
-        <div class="stat-row"><span>Chaos</span><div class="stat-bar"><div id="stat-chaos" class="stat-fill chaos"></div></div></div>
-        <div class="stat-row"><span>Attachment</span><div class="stat-bar"><div id="stat-attachment" class="stat-fill attachment"></div></div></div>
-        <div class="stat-row"><span>Drama</span><div class="stat-bar"><div id="stat-dramaNeed" class="stat-fill drama"></div></div></div>
-        <div class="stat-row"><span>Patience</span><div class="stat-bar"><div id="stat-patience" class="stat-fill patience"></div></div></div>
+        <div class="stats-panel-hover">
+          <span class="label">STATE</span>
+          <span id="hud-hover-type">—</span>
+        </div>
+      </div>
+      <div class="stats-bars" role="group" aria-label="Emotional stats">
+        <div class="stat-col">
+          <span class="stat-value" id="stat-trust-value">50</span>
+          <div class="stat-bar-v"><div id="stat-trust" class="stat-fill trust"></div></div>
+          <span class="stat-label">Trust</span>
+        </div>
+        <div class="stat-col">
+          <span class="stat-value" id="stat-resentment-value">50</span>
+          <div class="stat-bar-v"><div id="stat-resentment" class="stat-fill resentment"></div></div>
+          <span class="stat-label">Resent</span>
+        </div>
+        <div class="stat-col">
+          <span class="stat-value" id="stat-ego-value">50</span>
+          <div class="stat-bar-v"><div id="stat-ego" class="stat-fill ego"></div></div>
+          <span class="stat-label">Ego</span>
+        </div>
+        <div class="stat-col">
+          <span class="stat-value" id="stat-chaos-value">50</span>
+          <div class="stat-bar-v"><div id="stat-chaos" class="stat-fill chaos"></div></div>
+          <span class="stat-label">Chaos</span>
+        </div>
+        <div class="stat-col">
+          <span class="stat-value" id="stat-attachment-value">50</span>
+          <div class="stat-bar-v"><div id="stat-attachment" class="stat-fill attachment"></div></div>
+          <span class="stat-label">Attach</span>
+        </div>
+        <div class="stat-col">
+          <span class="stat-value" id="stat-dramaNeed-value">50</span>
+          <div class="stat-bar-v"><div id="stat-dramaNeed" class="stat-fill drama"></div></div>
+          <span class="stat-label">Drama</span>
+        </div>
+        <div class="stat-col">
+          <span class="stat-value" id="stat-patience-value">50</span>
+          <div class="stat-bar-v"><div id="stat-patience" class="stat-fill patience"></div></div>
+          <span class="stat-label">Patience</span>
+        </div>
       </div>
     </div>
 
