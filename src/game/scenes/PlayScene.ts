@@ -66,6 +66,7 @@ import { DEBUG_DIALOGUE, VOICE_SPEAKER_IDS } from '../config/voiceConfig';
 import { EmotionalLoadoutController } from '../dialogue/EmotionalLoadoutController';
 import { getCurrentEmotionalTarget } from '../systems/EmotionalTargeting';
 import { RelationshipMemory } from '../systems/RelationshipMemory';
+import { EmotionalDeliverySystem } from '../systems/EmotionalDeliverySystem';
 import { SpeakerWaveform } from '../visuals/SpeakerWaveform';
 import { SpeechVisualRegistry } from '../visuals/SpeechVisualRegistry';
 import {
@@ -194,6 +195,17 @@ export class PlayScene extends Phaser.Scene {
   private emotionalInteractionId = 0;
   private speechVisualRegistry: SpeechVisualRegistry | null = null;
   private emotionalLoadoutController: EmotionalLoadoutController | null = null;
+  private emotionalDelivery: EmotionalDeliverySystem | null = null;
+  /** Captured at action accept; applied only after absorption resolves. */
+  private pendingEmotionalResolution: {
+    actionId: string;
+    modeId: EmotionalResponseModeId;
+    targetCharacterId: string;
+    targetBallId: string;
+    targetDisplayName: string;
+    statChanges: Partial<import('../types/BallTypes').BallStats>;
+    rallyNumber: number;
+  } | null = null;
   private readonly relationshipMemory = new RelationshipMemory();
   private sceneTeardown = false;
   private readonly onEmotionalLoadoutKeyDown = (event: KeyboardEvent): void => {
@@ -268,6 +280,7 @@ export class PlayScene extends Phaser.Scene {
       0x00e5ff
     );
     this.playerPaddle.setStrokeStyle(2, 0x88ffff, 0.9);
+    this.playerPaddle.setDepth(4);
     this.physics.add.existing(this.playerPaddle);
     this.playerPaddleBody = this.playerPaddle.body as Phaser.Physics.Arcade.Body;
     this.playerPaddleBody.setImmovable(true);
@@ -281,6 +294,7 @@ export class PlayScene extends Phaser.Scene {
       0x556677
     );
     this.opponentPaddle.setStrokeStyle(2, 0x8899aa, 0.75);
+    this.opponentPaddle.setDepth(4);
     this.physics.add.existing(this.opponentPaddle);
     this.opponentPaddleBody = this.opponentPaddle.body as Phaser.Physics.Arcade.Body;
     this.opponentPaddleBody.setImmovable(true);
@@ -331,6 +345,7 @@ export class PlayScene extends Phaser.Scene {
     );
 
     this.setupSpeechVisuals(colors.stroke);
+    this.setupEmotionalDelivery();
 
     const playfieldHeight = this.playfieldBottom - this.playfieldTop;
     this.physics.world.setBounds(-400, this.playfieldTop, width + 800, playfieldHeight);
@@ -344,26 +359,10 @@ export class PlayScene extends Phaser.Scene {
     this.setupMousePaddleInput();
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      this.sceneTeardown = true;
-      this.teardownEmotionalLoadoutKeyboard();
-      this.resetEmotionalInventoryInteraction();
-      this.emotionalLoadoutController?.cancel();
-      this.teardownSpeechVisuals();
-      this.stopValentineThinking();
-      uiManager.hideSpeechCaption();
-      voiceDirector.stopAll();
-      voiceDirector.setCurrentInteractionId(null);
+      this.teardownEmotionalCombat();
     });
     this.events.once(Phaser.Scenes.Events.DESTROY, () => {
-      this.sceneTeardown = true;
-      this.teardownEmotionalLoadoutKeyboard();
-      this.resetEmotionalInventoryInteraction();
-      this.emotionalLoadoutController?.cancel();
-      this.teardownSpeechVisuals();
-      this.stopValentineThinking();
-      uiManager.hideSpeechCaption();
-      voiceDirector.stopAll();
-      voiceDirector.setCurrentInteractionId(null);
+      this.teardownEmotionalCombat();
     });
 
     soundManager.unlock();
@@ -1085,6 +1084,9 @@ export class PlayScene extends Phaser.Scene {
 
   update(_time: number, delta: number): void {
     this.speechVisualRegistry?.update(delta);
+    if (!this.isPaused) {
+      this.emotionalDelivery?.update(delta);
+    }
     this.updateEmotionalCooldownHud();
 
     if (this.gameState === 'matchEnd') return;
@@ -1457,12 +1459,16 @@ export class PlayScene extends Phaser.Scene {
   private setEmotionalActionState(state: EmotionalActionState): void {
     this.emotionalActionState = state;
     uiManager.setEmotionalActionState(state);
+    if (!this.emotionalDelivery?.isBusy()) {
+      this.emotionalDelivery?.setIdleState(state);
+    }
   }
 
   private canUseEmotionalAction(): boolean {
     if (this.sceneTeardown) return false;
     if (this.isPaused) return false;
     if (isTypingInFormField()) return false;
+    if (this.emotionalDelivery && !this.emotionalDelivery.canAcceptInput()) return false;
     if (
       this.gameState === 'intro' ||
       this.gameState === 'countdown' ||
@@ -1483,34 +1489,79 @@ export class PlayScene extends Phaser.Scene {
     this.emotionalCooldownUntil = Date.now() + EMOTIONAL_ACTION_CONFIG.globalCooldownMs;
     this.setEmotionalActionState('cooldown');
     uiManager.setEmotionalCooldownProgress(1);
+    this.emotionalDelivery?.setCooldownProgress(1);
   }
 
   private updateEmotionalCooldownHud(): void {
     if (this.emotionalActionState !== 'cooldown') return;
+    if (this.emotionalDelivery?.isBusy()) return;
     const remaining = this.emotionalCooldownUntil - Date.now();
     if (remaining <= 0) {
       this.emotionalCooldownUntil = 0;
       uiManager.setEmotionalCooldownProgress(0);
+      this.emotionalDelivery?.setCooldownProgress(0);
       uiManager.clearPendingEmotionalMode();
       if (!this.sceneTeardown && !this.isPaused && this.gameState !== 'matchEnd') {
         this.setEmotionalActionState('available');
       }
       return;
     }
-    uiManager.setEmotionalCooldownProgress(remaining / EMOTIONAL_ACTION_CONFIG.globalCooldownMs);
+    const progress = remaining / EMOTIONAL_ACTION_CONFIG.globalCooldownMs;
+    uiManager.setEmotionalCooldownProgress(progress);
+    this.emotionalDelivery?.setCooldownProgress(progress);
   }
 
   private resetEmotionalInventoryInteraction(): void {
     this.emotionalInteractionId += 1;
     this.currentEmotionalActionId = null;
+    this.pendingEmotionalResolution = null;
     this.emotionalCooldownUntil = 0;
     voiceDirector.setCurrentInteractionId(null);
     this.emotionalLoadoutController?.cancel();
+    this.emotionalDelivery?.hardReset();
     uiManager.clearPendingEmotionalMode();
     uiManager.setEmotionalCooldownProgress(0);
     this.setEmotionalActionState(
       this.sceneTeardown || this.gameState === 'matchEnd' ? 'disabled' : 'available'
     );
+  }
+
+  private teardownEmotionalCombat(): void {
+    if (this.sceneTeardown && !this.emotionalDelivery) return;
+    this.sceneTeardown = true;
+    this.teardownEmotionalLoadoutKeyboard();
+    this.pendingEmotionalResolution = null;
+    this.currentEmotionalActionId = null;
+    this.emotionalLoadoutController?.cancel();
+    this.emotionalDelivery?.hardReset();
+    this.emotionalDelivery?.destroy();
+    this.emotionalDelivery = null;
+    uiManager.clearPendingEmotionalMode();
+    uiManager.setEmotionalCooldownProgress(0);
+    this.emotionalActionState = 'disabled';
+    uiManager.setEmotionalActionState('disabled');
+    this.teardownSpeechVisuals();
+    this.stopValentineThinking();
+    uiManager.hideSpeechCaption();
+    voiceDirector.stopAll();
+    voiceDirector.setCurrentInteractionId(null);
+  }
+
+  private setupEmotionalDelivery(): void {
+    this.emotionalDelivery?.destroy();
+    this.emotionalDelivery = new EmotionalDeliverySystem(this, {
+      getPaddlePosition: () => ({ x: this.playerPaddle.x, y: this.playerPaddle.y }),
+      getBallPosition: () => ({ x: this.ball.x, y: this.ball.y }),
+      getBallRadius: () => this.BALL_RADIUS,
+      isTargetValid: () =>
+        !this.sceneTeardown && this.gameState !== 'matchEnd' && Boolean(this.ball?.active),
+      onModeSelected: (modeId) => this.useEmotionalAction(modeId, 'click'),
+      onDeliveryResolved: (actionId, modeId) => this.resolveEmotionalDelivery(actionId, modeId),
+      onDeliveryCancelled: (actionId) => this.cancelEmotionalDelivery(actionId),
+    });
+    this.emotionalDelivery.bindBallVisuals(this.ball, this.ballGlow);
+    this.emotionalDelivery.layout(this.playfield, this.playerSide);
+    this.emotionalDelivery.setIdleState('disabled');
   }
 
   private isEmotionalActionCurrent(actionId: string): boolean {
@@ -1528,7 +1579,7 @@ export class PlayScene extends Phaser.Scene {
 
   /**
    * Authoritative Emotional Loadout action for clicks and keyboard.
-   * Applies deterministic gameplay immediately; speech is async flavor only.
+   * Starts delivery VFX + async OpenAI generation; deterministic effects wait for absorption.
    */
   private useEmotionalAction(
     modeId: EmotionalResponseModeId,
@@ -1563,44 +1614,38 @@ export class PlayScene extends Phaser.Scene {
 
     const characterId = getEmotionalResponseCharacterIdForBall(target.ballId);
     const statChanges = getEmotionalResponseEffects(mode.id, characterId, target.ballId);
-
-    // 1–5: immediate gameplay (never wait on OpenAI / ElevenLabs).
-    this.personality.updateStats(statChanges);
-    uiManager.updateStats(this.personality.getStats());
-    uiManager.updateBallMeta(
-      this.currentHoverType || 'rally',
-      this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
-    );
-    uiManager.setPendingEmotionalMode(mode.id);
-    uiManager.pulseEmotionalMode(mode.id);
-    this.beginEmotionalCooldown();
-
     const rallyNumber = this.scoring.currentRallyHits;
-    this.relationshipMemory.record({
+
+    this.pendingEmotionalResolution = {
       actionId,
-      actorId: 'player',
-      targetId: target.characterId,
       modeId: mode.id,
+      targetCharacterId: target.characterId,
+      targetBallId: target.ballId,
+      targetDisplayName: target.displayName,
       statChanges,
       rallyNumber,
-      scoreContext: {
-        playerScore: this.matchSystem.playerPoints,
-        opponentScore: this.matchSystem.opponentPoints,
-      },
-      timestamp: Date.now(),
-    });
+    };
 
-    this.recentEvents.push(`loadout:${mode.id}`);
-    if (this.recentEvents.length > 8) this.recentEvents.shift();
+    uiManager.setPendingEmotionalMode(mode.id);
+    uiManager.pulseEmotionalMode(mode.id);
+
+    const started = this.emotionalDelivery?.beginDelivery(actionId, mode.id) ?? false;
+    if (!started) {
+      this.logLoadoutKey('Action rejected — delivery busy', { modeId, inputSource, actionId });
+      this.pendingEmotionalResolution = null;
+      this.currentEmotionalActionId = null;
+      uiManager.clearPendingEmotionalMode();
+      return;
+    }
+
+    // Lock Loadout input for the delivery sequence (not yet cooldown).
+    this.emotionalActionState = 'disabled';
+    uiManager.setEmotionalActionState('disabled');
 
     this.logLoadoutKey('Mode selection accepted', { modeId, inputSource, actionId });
 
-    if (DEBUG_DIALOGUE) {
-      uiManager.showDebugToast(this.formatEmotionalModeResult(mode, statChanges));
-    }
-
-    // Async flavor — gameplay already applied; never await here.
-    void this.emotionalLoadoutController?.speakFlavor({
+    // Start OpenAI early; speech held until absorption resolves.
+    this.emotionalLoadoutController?.primeFlavor({
       actionId,
       loadout: mode.id,
       targetBallId: target.ballId,
@@ -1617,6 +1662,76 @@ export class PlayScene extends Phaser.Scene {
       },
       patternSummary: this.relationshipMemory.getPatternSummary(),
     });
+  }
+
+  /** Deterministic resolution after beam absorption — never driven by OpenAI/TTS. */
+  private resolveEmotionalDelivery(actionId: string, modeId: EmotionalResponseModeId): void {
+    const pending = this.pendingEmotionalResolution;
+    if (!pending || pending.actionId !== actionId || pending.modeId !== modeId) {
+      if (import.meta.env.DEV) {
+        console.warn('[EmotionalDelivery] resolve ignored — pending mismatch', {
+          actionId,
+          modeId,
+        });
+      }
+      return;
+    }
+    if (this.sceneTeardown || this.gameState === 'matchEnd') {
+      this.pendingEmotionalResolution = null;
+      this.emotionalLoadoutController?.cancel();
+      return;
+    }
+
+    this.pendingEmotionalResolution = null;
+    const mode = getEmotionalResponseMode(modeId);
+
+    this.personality.updateStats(pending.statChanges);
+    uiManager.updateStats(this.personality.getStats());
+    uiManager.updateBallMeta(
+      this.currentHoverType || 'rally',
+      this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId)
+    );
+
+    this.relationshipMemory.record({
+      actionId,
+      actorId: 'player',
+      targetId: pending.targetCharacterId,
+      modeId,
+      statChanges: pending.statChanges,
+      rallyNumber: pending.rallyNumber,
+      scoreContext: {
+        playerScore: this.matchSystem.playerPoints,
+        opponentScore: this.matchSystem.opponentPoints,
+      },
+      timestamp: Date.now(),
+    });
+
+    this.recentEvents.push(`loadout:${modeId}`);
+    if (this.recentEvents.length > 8) this.recentEvents.shift();
+
+    if (DEBUG_DIALOGUE) {
+      uiManager.showDebugToast(this.formatEmotionalModeResult(mode, pending.statChanges));
+    }
+
+    this.emotionalLoadoutController?.releaseFlavor(actionId);
+    this.beginEmotionalCooldown();
+  }
+
+  private cancelEmotionalDelivery(actionId: string): void {
+    if (this.pendingEmotionalResolution?.actionId === actionId) {
+      this.pendingEmotionalResolution = null;
+    }
+    if (this.currentEmotionalActionId === actionId) {
+      this.currentEmotionalActionId = null;
+      voiceDirector.setCurrentInteractionId(null);
+    }
+    this.emotionalLoadoutController?.cancel();
+    uiManager.clearPendingEmotionalMode();
+    if (!this.sceneTeardown && !this.isPaused && this.gameState !== 'matchEnd') {
+      this.setEmotionalActionState(
+        Date.now() < this.emotionalCooldownUntil ? 'cooldown' : 'available'
+      );
+    }
   }
 
   private applyVoiceTurnReaction(reaction: GeneratedReaction, actionId: string): void {

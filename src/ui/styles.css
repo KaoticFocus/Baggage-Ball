@@ -8,7 +8,9 @@
 
 :root {
   --hud-top-inset: max(12px, env(safe-area-inset-top, 0px));
-  --inventory-reserve: 72px;
+  /* Loadout is in-playfield; reserve only a thin caption band. */
+  --inventory-reserve: 28px;
+  --caption-bottom: 18px;
 }
 
 body {
@@ -53,13 +55,15 @@ body {
 
 @media (max-height: 800px) {
   :root {
-    --inventory-reserve: 64px;
+    --inventory-reserve: 24px;
+    --caption-bottom: 14px;
   }
 }
 
 @media (max-height: 700px) {
   :root {
-    --inventory-reserve: 56px;
+    --inventory-reserve: 20px;
+    --caption-bottom: 12px;
   }
 
   .emotional-inventory {
@@ -609,6 +613,12 @@ body {
   color: #c8d4e8;
 }
 
+/* Bottom DOM Loadout retired — Phaser weapon stack is authoritative. */
+.emotional-inventory--weapon-mirror,
+.emotional-inventory.hidden {
+  display: none !important;
+}
+
 .emotional-inventory {
   position: fixed;
   left: 50%;
@@ -713,7 +723,7 @@ body {
 .speech-caption {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--inventory-reserve) + 10px);
+  bottom: var(--caption-bottom);
   transform: translateX(-50%);
   width: min(70vw, 760px);
   max-width: min(70vw, 760px);

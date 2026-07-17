@@ -883,49 +883,13 @@ export class UIManager {
     });
   }
 
-  private logEmotionalInventoryLayout(): void {
-    if (!import.meta.env.DEV) return;
-
-    const rect = this.emotionalInventory.getBoundingClientRect();
-    const computed = window.getComputedStyle(this.emotionalInventory);
-    const ancestors: Array<{ element: string; overflow: string; display: string }> = [];
-    let parent = this.emotionalInventory.parentElement;
-    while (parent) {
-      const parentStyle = window.getComputedStyle(parent);
-      ancestors.push({
-        element: parent.id ? `#${parent.id}` : parent.tagName.toLowerCase(),
-        overflow: parentStyle.overflow,
-        display: parentStyle.display,
-      });
-      parent = parent.parentElement;
-    }
-
-    console.log('[Emotional Inventory] HUD mounted', {
-      boundingClientRect: {
-        left: rect.left,
-        top: rect.top,
-        right: rect.right,
-        bottom: rect.bottom,
-        width: rect.width,
-        height: rect.height,
-      },
-      className: this.emotionalInventory.className,
-      state: this.emotionalInventoryState,
-      computedDisplay: computed.display,
-      computedVisibility: computed.visibility,
-      computedZIndex: computed.zIndex,
-      belowViewport: rect.top >= window.innerHeight || rect.bottom <= 0,
-      clippedAncestors: ancestors.filter(({ overflow }) => overflow === 'hidden' || overflow === 'clip'),
-      ancestors,
-    });
-  }
-
   private showEmotionalInventory(): void {
+    // Loadout weapon stack lives in Phaser behind the player paddle.
+    // Keep the DOM mount for cooldown mirror / a11y hooks, but never show the bottom bar.
     this.renderEmotionalInventoryOnce();
-    this.emotionalInventory.classList.remove('hidden');
-    this.emotionalInventory.classList.toggle('emotional-inventory-dev-probe', import.meta.env.DEV);
+    this.emotionalInventory.classList.add('hidden');
+    this.emotionalInventory.classList.add('emotional-inventory--weapon-mirror');
     this.setEmotionalActionState('available');
-    requestAnimationFrame(() => this.logEmotionalInventoryLayout());
   }
 
   private hideEmotionalInventory(): void {

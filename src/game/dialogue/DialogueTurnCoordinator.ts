@@ -1,5 +1,6 @@
 /**
  * Owns conversational sequencing for Emotional Loadout voice turns.
+ * Generation and speech are separable so delivery VFX can gate VoiceDirector.
  * All character audio goes through VoiceDirector only.
  */
 
@@ -15,19 +16,84 @@ import { classifyPlayerResponse } from '../services/classifyResponseClient';
 
 const LOADOUT_LINE_URL = '/.netlify/functions/generate-loadout-line';
 
+export type GeneratedTurnContent = {
+  ok: boolean;
+  playerLine: GeneratedLoadoutLine | null;
+  reaction: GeneratedReaction | null;
+};
+
 export class DialogueTurnCoordinator {
   private activeTurnId: string | null = null;
+  private generatingTurnId: string | null = null;
 
   hasActiveTurn(): boolean {
-    return this.activeTurnId !== null;
+    return this.activeTurnId !== null || this.generatingTurnId !== null;
   }
 
   getActiveTurnId(): string | null {
-    return this.activeTurnId;
+    return this.activeTurnId ?? this.generatingTurnId;
   }
 
-  async executeTurn(
+  /**
+   * OpenAI-only phase. Does not speak. Safe to run during beam delivery.
+   */
+  async generateTurnContent(
     turn: DialogueTurn,
+    options?: {
+      targetStillExists?: (targetId: string) => boolean;
+    }
+  ): Promise<GeneratedTurnContent> {
+    if (this.generatingTurnId && this.generatingTurnId !== turn.id) {
+      this.cancelActiveTurn();
+    }
+    this.generatingTurnId = turn.id;
+
+    try {
+      const generatedPlayerLine = await this.generatePlayerLine(turn);
+      if (this.generatingTurnId !== turn.id) {
+        return { ok: false, playerLine: null, reaction: null };
+      }
+      this.assertTargetStillExists(turn.target.id, options?.targetStillExists);
+
+      if (DEBUG_DIALOGUE) {
+        console.log('[DialogueTurn] playerLine', generatedPlayerLine.playerLine);
+      }
+
+      const reaction = await this.generateCharacterReaction(turn, generatedPlayerLine.playerLine);
+      if (this.generatingTurnId !== turn.id) {
+        return { ok: false, playerLine: null, reaction: null };
+      }
+      this.assertTargetStillExists(turn.target.id, options?.targetStillExists);
+
+      if (DEBUG_DIALOGUE) {
+        console.log('[DialogueTurn] reactionLine', reaction.reactionLine);
+      }
+
+      return { ok: true, playerLine: generatedPlayerLine, reaction };
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.warn('[DialogueTurn] generation failed', {
+          turnId: turn.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return { ok: false, playerLine: null, reaction: null };
+    } finally {
+      if (this.generatingTurnId === turn.id) {
+        this.generatingTurnId = null;
+      }
+    }
+  }
+
+  /**
+   * Speak previously generated content through VoiceDirector.
+   */
+  async speakTurnContent(
+    turn: DialogueTurn,
+    content: {
+      playerLine: GeneratedLoadoutLine | null;
+      reaction: GeneratedReaction | null;
+    },
     options?: {
       onReaction?: (reaction: GeneratedReaction) => void;
       onPlayerLine?: (line: string) => void;
@@ -35,7 +101,6 @@ export class DialogueTurnCoordinator {
       interactionId?: number | string;
     }
   ): Promise<{ ok: boolean; reaction: GeneratedReaction | null }> {
-    // Newer emotional flavor replaces a still-pending previous turn's coordination.
     if (this.activeTurnId && this.activeTurnId !== turn.id) {
       this.cancelActiveTurn();
     }
@@ -44,41 +109,32 @@ export class DialogueTurnCoordinator {
     }
 
     this.activeTurnId = turn.id;
-    let reaction: GeneratedReaction | null = null;
+    const reaction = content.reaction;
 
     try {
       await voiceDirector.ensureAudioReady();
-
-      const generatedPlayerLine = await this.generatePlayerLine(turn);
       this.assertTurnIsCurrent(turn.id);
       this.assertTargetStillExists(turn.target.id, options?.targetStillExists);
 
-      if (DEBUG_DIALOGUE) {
-        console.log('[DialogueTurn] playerLine', generatedPlayerLine.playerLine);
-      }
-
-      options?.onPlayerLine?.(generatedPlayerLine.playerLine);
-
-      const reactionPromise = this.generateCharacterReaction(
-        turn,
-        generatedPlayerLine.playerLine
-      );
-
-      // TTS failure must not block captions or character reaction generation.
-      if (generatedPlayerLine.playerLine.trim()) {
+      const playerLine = content.playerLine?.playerLine?.trim() ?? '';
+      if (playerLine) {
+        options?.onPlayerLine?.(playerLine);
         try {
           await voiceDirector.speak({
             characterId: turn.player.characterId,
             speakerId: turn.player.id,
             speakerKind: turn.player.kind,
-            text: generatedPlayerLine.playerLine,
+            text: playerLine,
             priority: 'emotionalResponse',
             category: 'emotionalResponse',
             turnId: turn.id,
             interactionId: options?.interactionId,
             interruptible: true,
             dedupeKey: `loadout-player:${turn.id}`,
-            metadata: { loadout: turn.loadout, deliveryHints: generatedPlayerLine.deliveryHints },
+            metadata: {
+              loadout: turn.loadout,
+              deliveryHints: content.playerLine?.deliveryHints,
+            },
           });
         } catch (error) {
           if (import.meta.env.DEV) {
@@ -88,25 +144,20 @@ export class DialogueTurnCoordinator {
       }
 
       this.assertTurnIsCurrent(turn.id);
-      reaction = await reactionPromise;
-      this.assertTurnIsCurrent(turn.id);
       this.assertTargetStillExists(turn.target.id, options?.targetStillExists);
 
-      if (DEBUG_DIALOGUE) {
-        console.log('[DialogueTurn] reactionLine', reaction.reactionLine);
-      }
-
-      options?.onReaction?.(reaction);
-
-      if (reaction.reactionLine.trim()) {
-        try {
-          await this.speakAs(turn.target, reaction.reactionLine, turn.id, options?.interactionId, {
-            loadout: turn.loadout,
-            deliveryHints: reaction.deliveryHints,
-          });
-        } catch (error) {
-          if (import.meta.env.DEV) {
-            console.warn('[DialogueTurn] reaction TTS failed; caption remains', error);
+      if (reaction) {
+        options?.onReaction?.(reaction);
+        if (reaction.reactionLine.trim()) {
+          try {
+            await this.speakAs(turn.target, reaction.reactionLine, turn.id, options?.interactionId, {
+              loadout: turn.loadout,
+              deliveryHints: reaction.deliveryHints,
+            });
+          } catch (error) {
+            if (import.meta.env.DEV) {
+              console.warn('[DialogueTurn] reaction TTS failed; caption remains', error);
+            }
           }
         }
       }
@@ -114,7 +165,7 @@ export class DialogueTurnCoordinator {
       return { ok: true, reaction };
     } catch (error) {
       if (import.meta.env.DEV) {
-        console.warn('[DialogueTurn] failed', {
+        console.warn('[DialogueTurn] speak failed', {
           turnId: turn.id,
           message: error instanceof Error ? error.message : String(error),
         });
@@ -128,10 +179,27 @@ export class DialogueTurnCoordinator {
     }
   }
 
+  /** Full generate+speak path (legacy helper). */
+  async executeTurn(
+    turn: DialogueTurn,
+    options?: {
+      onReaction?: (reaction: GeneratedReaction) => void;
+      onPlayerLine?: (line: string) => void;
+      targetStillExists?: (targetId: string) => boolean;
+      interactionId?: number | string;
+    }
+  ): Promise<{ ok: boolean; reaction: GeneratedReaction | null }> {
+    const generated = await this.generateTurnContent(turn, options);
+    if (!generated.ok) return { ok: false, reaction: null };
+    return this.speakTurnContent(turn, generated, options);
+  }
+
   cancelActiveTurn(): void {
-    if (!this.activeTurnId) return;
-    voiceDirector.cancelTurn(this.activeTurnId, true);
-    this.activeTurnId = null;
+    if (this.activeTurnId) {
+      voiceDirector.cancelTurn(this.activeTurnId, true);
+      this.activeTurnId = null;
+    }
+    this.generatingTurnId = null;
   }
 
   private speakAs(
@@ -213,7 +281,7 @@ export class DialogueTurnCoordinator {
       : turn.target.characterId;
 
     const result = await classifyPlayerResponse({
-      playerText: playerLine,
+      playerText: playerLine || `[Emotional Loadout: ${turn.loadout}]`,
       ballId,
       situation: turn.triggeringEvent || 'hoverResponse',
       responseModeId: turn.loadout,

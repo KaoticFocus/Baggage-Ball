@@ -1,10 +1,16 @@
 /**
  * Async Emotional Loadout flavor (OpenAI wording + VoiceDirector speech).
+ * Generation may start on action accept; speech waits until releaseFlavor (after absorption).
  * Never pauses physics. Never owns gameplay cooldown or stat authority.
  */
 
 import { voiceDirector } from '../audio/VoiceDirector';
-import type { DialogueTurn, EmotionalLoadoutId, GeneratedReaction } from '../audio/speechTypes';
+import type {
+  DialogueTurn,
+  EmotionalLoadoutId,
+  GeneratedLoadoutLine,
+  GeneratedReaction,
+} from '../audio/speechTypes';
 import {
   createBallSpeaker,
   createPlayerSpeaker,
@@ -24,7 +30,18 @@ export type LoadoutFlavorSnapshot = {
   patternSummary?: string;
 };
 
+type PendingFlavor = {
+  snapshot: LoadoutFlavorSnapshot;
+  released: boolean;
+  cancelled: boolean;
+  playerLine: GeneratedLoadoutLine | null;
+  reaction: GeneratedReaction | null;
+  generation: Promise<void>;
+};
+
 export class EmotionalLoadoutController {
+  private pending: PendingFlavor | null = null;
+
   constructor(
     private readonly applyReaction: (reaction: GeneratedReaction, actionId: string) => void,
     private readonly isActionCurrent: (actionId: string) => boolean,
@@ -32,24 +49,119 @@ export class EmotionalLoadoutController {
   ) {}
 
   cancel(): void {
+    if (this.pending) {
+      this.pending.cancelled = true;
+      this.pending = null;
+    }
     dialogueTurnCoordinator.cancelActiveTurn();
   }
 
   /**
-   * Fire-and-forget spoken flavor for an already-applied emotional action.
-   * Safe to call without awaiting for gameplay.
+   * Start OpenAI generation immediately; do not speak until releaseFlavor.
    */
-  async speakFlavor(snapshot: LoadoutFlavorSnapshot): Promise<void> {
-    if (!this.isActionCurrent(snapshot.actionId)) return;
+  primeFlavor(snapshot: LoadoutFlavorSnapshot): void {
+    this.cancel();
 
+    const entry: PendingFlavor = {
+      snapshot,
+      released: false,
+      cancelled: false,
+      playerLine: null,
+      reaction: null,
+      generation: Promise.resolve(),
+    };
+    this.pending = entry;
+
+    entry.generation = this.runGeneration(entry);
+  }
+
+  /**
+   * Allow held (or still-generating) flavor to speak via VoiceDirector.
+   * Safe to call after absorption; no-op if stale/cancelled.
+   */
+  releaseFlavor(actionId: string): void {
+    const entry = this.pending;
+    if (!entry || entry.snapshot.actionId !== actionId || entry.cancelled) return;
+    if (!this.isActionCurrent(actionId)) {
+      this.cancel();
+      return;
+    }
+    entry.released = true;
+    void this.trySpeak(entry);
+  }
+
+  private async runGeneration(entry: PendingFlavor): Promise<void> {
+    const { snapshot } = entry;
     try {
       await voiceDirector.ensureAudioReady();
-      if (!this.isActionCurrent(snapshot.actionId)) return;
+      if (entry.cancelled || !this.isActionCurrent(snapshot.actionId)) return;
 
       const turn = this.createTurn(snapshot);
-      const result = await dialogueTurnCoordinator.executeTurn(turn, {
-        targetStillExists: () => this.isActionCurrent(snapshot.actionId),
+      const content = await dialogueTurnCoordinator.generateTurnContent(turn, {
+        targetStillExists: () => this.isActionCurrent(snapshot.actionId) && !entry.cancelled,
+      });
+
+      if (entry.cancelled || !this.isActionCurrent(snapshot.actionId)) return;
+      if (!content.ok) {
+        if (import.meta.env.DEV) {
+          console.warn('[EmotionalLoadout] generation failed; gameplay effects still apply', {
+            actionId: snapshot.actionId,
+          });
+        }
+        return;
+      }
+
+      entry.playerLine = content.playerLine;
+      entry.reaction = content.reaction;
+
+      if (DEBUG_DIALOGUE) {
+        console.log('[EmotionalLoadout] generation ready', {
+          actionId: snapshot.actionId,
+          hasPlayerLine: Boolean(content.playerLine?.playerLine),
+        });
+      }
+
+      if (entry.released) {
+        await this.trySpeak(entry);
+      }
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.warn('[EmotionalLoadout] generation error', {
+          actionId: snapshot.actionId,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private async trySpeak(entry: PendingFlavor): Promise<void> {
+    if (!entry.released || entry.cancelled) return;
+    if (!entry.playerLine && !entry.reaction) {
+      // Still generating — speak when ready.
+      return;
+    }
+
+    const { snapshot } = entry;
+    if (!this.isActionCurrent(snapshot.actionId)) {
+      this.cancel();
+      return;
+    }
+
+    // Consume pending so we only speak once.
+    if (this.pending === entry) {
+      this.pending = null;
+    }
+
+    const turn = this.createTurn(snapshot);
+    await dialogueTurnCoordinator.speakTurnContent(
+      turn,
+      {
+        playerLine: entry.playerLine,
+        reaction: entry.reaction,
+      },
+      {
         interactionId: snapshot.actionId,
+        targetStillExists: () => this.isActionCurrent(snapshot.actionId),
         onPlayerLine: (line) => {
           if (!line.trim() || !this.isActionCurrent(snapshot.actionId)) return;
           this.onCaption?.('You', line);
@@ -61,22 +173,8 @@ export class EmotionalLoadoutController {
           }
           this.applyReaction(reaction, snapshot.actionId);
         },
-      });
-
-      if (DEBUG_DIALOGUE) {
-        console.log('[EmotionalLoadout] flavor complete', {
-          actionId: snapshot.actionId,
-          ok: result.ok,
-        });
       }
-    } catch (error) {
-      if (import.meta.env.DEV) {
-        console.warn('[EmotionalLoadout] flavor failed; gameplay effects remain', {
-          actionId: snapshot.actionId,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    );
   }
 
   private createTurn(snapshot: LoadoutFlavorSnapshot): DialogueTurn {
