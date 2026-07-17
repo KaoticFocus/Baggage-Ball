@@ -24,6 +24,7 @@ type QueuedItem = {
   request: NormalizedSpeechRequest;
   resolve: (result: VoiceSpeakResult) => void;
   abortController: AbortController;
+  settled: boolean;
 };
 
 const DEV_LOG = import.meta.env.DEV;
@@ -176,7 +177,7 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
 
     return new Promise<VoiceSpeakResult>((resolve) => {
       const abortController = new AbortController();
-      this.queue.push({ request: normalized, resolve, abortController });
+      this.queue.push({ request: normalized, resolve, abortController, settled: false });
       this.sortQueue();
       logVoice('speech request queued', {
         requestId: normalized.id,
@@ -196,11 +197,10 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
       return false;
     });
 
+    // Abort active playback; processQueue finally exclusively clears current.
     if (this.current?.request.id === requestId) {
       this.abortItem(this.current, 'Cancelled by request id');
       this.playback.stop();
-      this.current = null;
-      void this.processQueue();
     }
   }
 
@@ -214,8 +214,6 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
     if (this.current?.request.interactionId === interactionId) {
       this.abortItem(this.current, 'Cancelled by interaction id');
       this.playback.stop();
-      this.current = null;
-      void this.processQueue();
     }
 
     if (this.currentInteractionId === interactionId) {
@@ -233,8 +231,6 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
     if (this.current?.request.characterId === characterId) {
       this.abortItem(this.current, 'Cancelled by character id');
       this.playback.stop();
-      this.current = null;
-      void this.processQueue();
     }
   }
 
@@ -249,9 +245,11 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
     this.clearQueue();
     if (this.current) {
       this.abortItem(this.current, 'stopAll');
-      this.current = null;
+      this.playback.stop();
+      // Do not null current here — processQueue finally owns that reset.
+    } else {
+      this.processing = false;
     }
-    this.playback.stop();
   }
 
   destroy(): void {
@@ -296,8 +294,6 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
     if (stopCurrent && this.current?.request.turnId === turnId) {
       this.abortItem(this.current, 'Cancelled by turn id');
       this.playback.stop();
-      this.current = null;
-      void this.processQueue();
     }
   }
 
@@ -496,7 +492,7 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
         request.onComplete?.();
       }
 
-      active.resolve({
+      this.settleItem(active, {
         ok,
         durationMs,
         cancelled,
@@ -504,7 +500,10 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
         message,
       });
 
-      this.current = null;
+      // Only clear if we still own the active slot — never wipe a newer request.
+      if (this.current?.request.id === request.id) {
+        this.current = null;
+      }
       this.processing = false;
       this.emit('speech:end', endEvent);
       void this.processQueue();
@@ -515,14 +514,20 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
     if (!item.abortController.signal.aborted) {
       item.abortController.abort();
     }
-    // If still current, processQueue finally will resolve. If already mid-flight,
-    // abort triggers aborted result. For queue items, finishCancelled handles it.
+    // Active item: processQueue finally settles. Queue item: settle now.
     if (this.current !== item) {
       this.finishCancelled(item, reason);
     }
   }
 
+  private settleItem(item: QueuedItem, result: VoiceSpeakResult): void {
+    if (item.settled) return;
+    item.settled = true;
+    item.resolve(result);
+  }
+
   private finishCancelled(item: QueuedItem, reason: string): void {
+    if (item.settled) return;
     if (!item.abortController.signal.aborted) {
       item.abortController.abort();
     }
@@ -531,13 +536,18 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
       reason,
     });
     item.request.onCancel?.();
-    item.resolve({
+    this.settleItem(item, {
       ok: false,
       durationMs: 0,
       cancelled: true,
       requestId: item.request.id,
       message: reason,
     });
+  }
+
+  /** Active request id for lifecycle diagnostics. */
+  getActiveRequestId(): string | null {
+    return this.current?.request.id ?? null;
   }
 }
 

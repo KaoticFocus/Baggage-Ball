@@ -205,6 +205,19 @@ export class UIManager {
     if (callbacks.onQuit !== undefined) this.onQuit = callbacks.onQuit;
   }
 
+  /** Drop PlayScene-owned callbacks so a destroyed scene cannot receive UI events. */
+  clearGameCallbacks(): void {
+    this.onPauseToggle = undefined;
+    this.onQuit = undefined;
+    this.onEmotionalResponseSelected = undefined;
+    this.onCustomResponseRequested = undefined;
+    this.onCustomResponseSubmitted = undefined;
+    this.onRecapRematch = undefined;
+    this.onRecapChangeBall = undefined;
+    this.onRecapChangeOpponent = undefined;
+    this.onRecapMenu = undefined;
+  }
+
   setPaused(paused: boolean): void {
     this.pauseBtn.textContent = paused ? 'Play' : 'Pause';
     this.pauseBanner.classList.toggle('hidden', !paused);

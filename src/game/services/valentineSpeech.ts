@@ -1,6 +1,7 @@
 /**
  * Valentine speech helpers — thin wrappers over VoiceDirector.
  * No local audio playback; ElevenLabs only via VoiceDirector.
+ * Captions manage their own timers; waitForPlayback waits only for VoiceDirector.
  */
 
 import type { SpeechCategory, SpeechPriority } from '../audio/speechTypes';
@@ -34,6 +35,8 @@ export type ValentineSpeechContext = {
   showBubble?: boolean;
   waitForPlayback?: boolean;
   interactionId?: number | string;
+  /** When aborted, skip TTS and avoid post-teardown speech queues. */
+  signal?: AbortSignal;
 };
 
 export type ValentineSpeechResult = {
@@ -44,9 +47,6 @@ export type ValentineSpeechResult = {
   source: 'elevenlabs' | 'cache' | 'text-only' | 'skipped';
   message?: string;
 };
-
-const BUBBLE_MIN_MS = 5000;
-const BUBBLE_TAIL_MS = 300;
 
 let inFlightByText = new Map<string, Promise<ValentineSpeechResult>>();
 
@@ -110,47 +110,90 @@ async function speakValentineLineInternal(
   }
 
   const eventType = context.eventType ?? 'other';
-  const showBubble = context.showBubble !== false;
-  const ballScreen = context.ballScreen;
+  const showCaption = context.showBubble !== false;
   const priority = mapPriority(eventType, context.priority ?? 'medium');
+  const captionMs = Math.max(2800, estimateDurationMs(normalized));
 
-  if (showBubble) {
-    uiManager.showBallComment(normalized, 120000, ballScreen);
+  if (context.signal?.aborted) {
+    return {
+      ok: false,
+      text: normalized,
+      durationMs: 0,
+      hadAudio: false,
+      source: 'skipped',
+      message: 'Aborted before speak',
+    };
   }
 
-  await voiceDirector.ensureAudioReady();
-
-  const played = await voiceDirector.speak({
-    characterId: 'valentine',
-    speakerId: 'ball:valentine',
-    speakerKind: 'ball',
-    text: normalized,
-    priority,
-    category: mapCategory(eventType),
-    interactionId: context.interactionId,
-    interruptible: priority !== 'emotionalResponse',
-    dedupeKey: `valentine:${eventType}:${normalized.toLowerCase()}`,
-    metadata: { eventType },
-  });
-
-  const durationMs = played.durationMs || estimateDurationMs(normalized);
-  const bubbleMs = Math.max(BUBBLE_MIN_MS, durationMs + BUBBLE_TAIL_MS);
-  if (showBubble) {
-    uiManager.showBallComment(normalized, bubbleMs, ballScreen);
+  if (showCaption) {
+    uiManager.showBallComment(normalized, captionMs, context.ballScreen);
   }
 
-  if (context.waitForPlayback !== false) {
-    await new Promise<void>((resolve) => window.setTimeout(resolve, bubbleMs));
+  try {
+    await voiceDirector.ensureAudioReady();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (import.meta.env.DEV) {
+      console.warn('[ValentineSpeech] audio ready failed; continuing text-only', message);
+    }
+    return {
+      ok: false,
+      text: normalized,
+      durationMs: 0,
+      hadAudio: false,
+      source: 'text-only',
+      message,
+    };
   }
 
-  return {
-    ok: played.ok && !played.cancelled,
-    text: normalized,
-    durationMs: bubbleMs,
-    hadAudio: played.ok && !played.cancelled,
-    source: played.ok ? 'elevenlabs' : played.cancelled ? 'skipped' : 'text-only',
-    message: played.message,
-  };
+  if (context.signal?.aborted) {
+    return {
+      ok: false,
+      text: normalized,
+      durationMs: 0,
+      hadAudio: false,
+      source: 'skipped',
+      message: 'Aborted after audio ready',
+    };
+  }
+
+  try {
+    const played = await voiceDirector.speak({
+      characterId: 'valentine',
+      speakerId: 'ball:valentine',
+      speakerKind: 'ball',
+      text: normalized,
+      priority,
+      category: mapCategory(eventType),
+      interactionId: context.interactionId,
+      interruptible: priority !== 'emotionalResponse',
+      dedupeKey: `valentine:${eventType}:${normalized.toLowerCase()}`,
+      metadata: { eventType },
+    });
+
+    // waitForPlayback waits only for VoiceDirector — no extra caption timer.
+    return {
+      ok: played.ok && !played.cancelled,
+      text: normalized,
+      durationMs: played.durationMs || 0,
+      hadAudio: played.ok && !played.cancelled,
+      source: played.ok ? 'elevenlabs' : played.cancelled ? 'skipped' : 'text-only',
+      message: played.message,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (import.meta.env.DEV) {
+      console.warn('[ValentineSpeech] speak failed; continuing text-only', message);
+    }
+    return {
+      ok: false,
+      text: normalized,
+      durationMs: 0,
+      hadAudio: false,
+      source: 'text-only',
+      message,
+    };
+  }
 }
 
 export async function speakValentineLine(
@@ -171,4 +214,5 @@ export async function speakValentineLine(
 
 export function stopValentineSpeech(): void {
   voiceDirector.cancelCharacter('valentine');
+  inFlightByText.clear();
 }

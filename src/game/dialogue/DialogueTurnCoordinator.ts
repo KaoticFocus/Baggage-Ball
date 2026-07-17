@@ -25,6 +25,7 @@ export type GeneratedTurnContent = {
 export class DialogueTurnCoordinator {
   private activeTurnId: string | null = null;
   private generatingTurnId: string | null = null;
+  private generationAbort: AbortController | null = null;
 
   hasActiveTurn(): boolean {
     return this.activeTurnId !== null || this.generatingTurnId !== null;
@@ -41,16 +42,31 @@ export class DialogueTurnCoordinator {
     turn: DialogueTurn,
     options?: {
       targetStillExists?: (targetId: string) => boolean;
+      signal?: AbortSignal;
     }
   ): Promise<GeneratedTurnContent> {
     if (this.generatingTurnId && this.generatingTurnId !== turn.id) {
       this.cancelActiveTurn();
     }
     this.generatingTurnId = turn.id;
+    this.generationAbort?.abort();
+    this.generationAbort = new AbortController();
+    const signal = this.generationAbort.signal;
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        this.generationAbort.abort();
+      } else {
+        options.signal.addEventListener('abort', () => this.generationAbort?.abort(), {
+          once: true,
+        });
+      }
+    }
 
     try {
-      const generatedPlayerLine = await this.generatePlayerLine(turn);
-      if (this.generatingTurnId !== turn.id) {
+      if (signal.aborted) return { ok: false, playerLine: null, reaction: null };
+
+      const generatedPlayerLine = await this.generatePlayerLine(turn, signal);
+      if (this.generatingTurnId !== turn.id || signal.aborted) {
         return { ok: false, playerLine: null, reaction: null };
       }
       this.assertTargetStillExists(turn.target.id, options?.targetStillExists);
@@ -59,8 +75,12 @@ export class DialogueTurnCoordinator {
         console.log('[DialogueTurn] playerLine', generatedPlayerLine.playerLine);
       }
 
-      const reaction = await this.generateCharacterReaction(turn, generatedPlayerLine.playerLine);
-      if (this.generatingTurnId !== turn.id) {
+      const reaction = await this.generateCharacterReaction(
+        turn,
+        generatedPlayerLine.playerLine,
+        signal
+      );
+      if (this.generatingTurnId !== turn.id || signal.aborted) {
         return { ok: false, playerLine: null, reaction: null };
       }
       this.assertTargetStillExists(turn.target.id, options?.targetStillExists);
@@ -71,6 +91,9 @@ export class DialogueTurnCoordinator {
 
       return { ok: true, playerLine: generatedPlayerLine, reaction };
     } catch (error) {
+      if (signal.aborted) {
+        return { ok: false, playerLine: null, reaction: null };
+      }
       if (import.meta.env.DEV) {
         console.warn('[DialogueTurn] generation failed', {
           turnId: turn.id,
@@ -200,6 +223,8 @@ export class DialogueTurnCoordinator {
       this.activeTurnId = null;
     }
     this.generatingTurnId = null;
+    this.generationAbort?.abort();
+    this.generationAbort = null;
   }
 
   private speakAs(
@@ -224,7 +249,10 @@ export class DialogueTurnCoordinator {
     });
   }
 
-  private async generatePlayerLine(turn: DialogueTurn): Promise<GeneratedLoadoutLine> {
+  private async generatePlayerLine(
+    turn: DialogueTurn,
+    signal?: AbortSignal
+  ): Promise<GeneratedLoadoutLine> {
     if (turn.loadout === 'go-silent') {
       return {
         turnId: turn.id,
@@ -247,6 +275,7 @@ export class DialogueTurnCoordinator {
           relationshipSnapshot: turn.relationshipSnapshot,
           emotionalStateSnapshot: turn.emotionalStateSnapshot,
         }),
+        signal,
       });
 
       const data = (await response.json()) as GeneratedLoadoutLine & {
@@ -265,6 +294,7 @@ export class DialogueTurnCoordinator {
         deliveryHints: data.deliveryHints,
       };
     } catch (error) {
+      if (signal?.aborted) throw error;
       if (import.meta.env.DEV) {
         console.warn('[DialogueTurn] player line generation failed', error);
       }
@@ -274,20 +304,24 @@ export class DialogueTurnCoordinator {
 
   private async generateCharacterReaction(
     turn: DialogueTurn,
-    playerLine: string
+    playerLine: string,
+    signal?: AbortSignal
   ): Promise<GeneratedReaction> {
     const ballId = turn.target.id.startsWith('ball:')
       ? turn.target.id.slice('ball:'.length)
       : turn.target.characterId;
 
-    const result = await classifyPlayerResponse({
-      playerText: playerLine || `[Emotional Loadout: ${turn.loadout}]`,
-      ballId,
-      situation: turn.triggeringEvent || 'hoverResponse',
-      responseModeId: turn.loadout,
-      responseModeName: turn.loadout,
-      responseModeDescription: `Player used Emotional Loadout: ${turn.loadout}`,
-    });
+    const result = await classifyPlayerResponse(
+      {
+        playerText: playerLine || `[Emotional Loadout: ${turn.loadout}]`,
+        ballId,
+        situation: turn.triggeringEvent || 'hoverResponse',
+        responseModeId: turn.loadout,
+        responseModeName: turn.loadout,
+        responseModeDescription: `Player used Emotional Loadout: ${turn.loadout}`,
+      },
+      { signal }
+    );
 
     return {
       turnId: turn.id,

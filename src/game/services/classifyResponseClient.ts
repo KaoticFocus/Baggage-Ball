@@ -45,16 +45,23 @@ const FALLBACK_RESULT: NetlifyClassifyResult = {
   behaviorModifier: 'none',
 };
 
-export async function classifyPlayerResponse(payload: {
-  playerText: string;
-  ballId: string;
-  situation: string;
-  responseModeId?: string;
-  responseModeName?: string;
-  responseModeDescription?: string;
-}): Promise<NetlifyClassifyResult> {
+export async function classifyPlayerResponse(
+  payload: {
+    playerText: string;
+    ballId: string;
+    situation: string;
+    responseModeId?: string;
+    responseModeName?: string;
+    responseModeDescription?: string;
+  },
+  options?: { signal?: AbortSignal }
+): Promise<NetlifyClassifyResult> {
+  if (options?.signal?.aborted) return FALLBACK_RESULT;
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timeoutId = window.setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const onExternalAbort = () => controller.abort();
+  options?.signal?.addEventListener('abort', onExternalAbort, { once: true });
 
   try {
     const res = await fetch(CLASSIFY_URL, {
@@ -64,8 +71,6 @@ export async function classifyPlayerResponse(payload: {
       signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
-
     if (!res.ok) {
       console.warn(`[AI Classifier] HTTP ${res.status}, using fallback`);
       return FALLBACK_RESULT;
@@ -74,8 +79,10 @@ export async function classifyPlayerResponse(payload: {
     const data = (await res.json()) as NetlifyClassifyResult;
     return data;
   } catch {
-    clearTimeout(timeoutId);
     console.warn('[AI Classifier] unavailable, using fallback');
     return FALLBACK_RESULT;
+  } finally {
+    window.clearTimeout(timeoutId);
+    options?.signal?.removeEventListener('abort', onExternalAbort);
   }
 }

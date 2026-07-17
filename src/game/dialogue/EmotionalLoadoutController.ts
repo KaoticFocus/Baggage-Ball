@@ -34,6 +34,7 @@ type PendingFlavor = {
   snapshot: LoadoutFlavorSnapshot;
   released: boolean;
   cancelled: boolean;
+  abort: AbortController;
   playerLine: GeneratedLoadoutLine | null;
   reaction: GeneratedReaction | null;
   generation: Promise<void>;
@@ -51,6 +52,7 @@ export class EmotionalLoadoutController {
   cancel(): void {
     if (this.pending) {
       this.pending.cancelled = true;
+      this.pending.abort.abort();
       this.pending = null;
     }
     dialogueTurnCoordinator.cancelActiveTurn();
@@ -59,13 +61,20 @@ export class EmotionalLoadoutController {
   /**
    * Start OpenAI generation immediately; do not speak until releaseFlavor.
    */
-  primeFlavor(snapshot: LoadoutFlavorSnapshot): void {
+  primeFlavor(snapshot: LoadoutFlavorSnapshot, parentSignal?: AbortSignal): void {
     this.cancel();
+
+    const abort = new AbortController();
+    if (parentSignal) {
+      if (parentSignal.aborted) abort.abort();
+      else parentSignal.addEventListener('abort', () => abort.abort(), { once: true });
+    }
 
     const entry: PendingFlavor = {
       snapshot,
       released: false,
       cancelled: false,
+      abort,
       playerLine: null,
       reaction: null,
       generation: Promise.resolve(),
@@ -99,9 +108,12 @@ export class EmotionalLoadoutController {
       const turn = this.createTurn(snapshot);
       const content = await dialogueTurnCoordinator.generateTurnContent(turn, {
         targetStillExists: () => this.isActionCurrent(snapshot.actionId) && !entry.cancelled,
+        signal: entry.abort.signal,
       });
 
-      if (entry.cancelled || !this.isActionCurrent(snapshot.actionId)) return;
+      if (entry.cancelled || entry.abort.signal.aborted || !this.isActionCurrent(snapshot.actionId)) {
+        return;
+      }
       if (!content.ok) {
         if (import.meta.env.DEV) {
           console.warn('[EmotionalLoadout] generation failed; gameplay effects still apply', {

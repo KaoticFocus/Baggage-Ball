@@ -87,6 +87,7 @@ import {
 } from '../layout/GameLayout';
 import type { ScreenBounds } from '../../ui/dialogueBubbleLayout';
 import { isEditableTarget, isTypingInFormField } from '../../ui/formInput';
+import { waitForDelay } from '../util/abortableDelay';
 
 /** Dev-only Emotional Loadout keyboard diagnostics (quiet unless DEV). */
 const DEBUG_LOADOUT_KEYS = import.meta.env.DEV;
@@ -166,7 +167,6 @@ export class PlayScene extends Phaser.Scene {
   private failsafeCheckTimer = 0;
   private isPaused = false;
   private serveLock = false;
-  private pausedTimeScale = 1;
   private lastMouseClientY: number | null = null;
   private mouseOnGameViewport = false;
   private mousePaddleDebugTimer = 0;
@@ -177,7 +177,6 @@ export class PlayScene extends Phaser.Scene {
   private readonly BALL_RADIUS = 12;
   private readonly SIDE_MISS_MARGIN = GAME_LAYOUT.SIDE_MISS_MARGIN;
   private readonly POST_MISS_COMMENT_MS = 3500;
-  private readonly OPENING_AUDIO_SAFE_MAX_MS = 8000;
   private readonly STANDARD_OPENING_BUBBLE_MS = 1600;
   private readonly STANDARD_INTRO_TO_SERVE_MS = 2200;
   private valentineRecentLines: string[] = [];
@@ -207,6 +206,13 @@ export class PlayScene extends Phaser.Scene {
     rallyNumber: number;
   } | null = null;
   private readonly relationshipMemory = new RelationshipMemory();
+  private sceneRunId = 0;
+  private isTransitioning = false;
+  private lifecycleAbortController: AbortController | null = null;
+  private trackedWindowTimers = new Set<number>();
+  private muteUnsubscribe: (() => void) | null = null;
+  private onMouseMoveBound: ((e: MouseEvent) => void) | null = null;
+  private onMouseLeaveBound: (() => void) | null = null;
   private sceneTeardown = false;
   private readonly onEmotionalLoadoutKeyDown = (event: KeyboardEvent): void => {
     this.handleEmotionalLoadoutKeyDown(event);
@@ -359,10 +365,10 @@ export class PlayScene extends Phaser.Scene {
     this.setupMousePaddleInput();
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      this.teardownEmotionalCombat();
+      this.teardownPlayScene('shutdown');
     });
     this.events.once(Phaser.Scenes.Events.DESTROY, () => {
-      this.teardownEmotionalCombat();
+      this.teardownPlayScene('destroy');
     });
 
     soundManager.unlock();
@@ -373,7 +379,7 @@ export class PlayScene extends Phaser.Scene {
         this.sound.unlock();
       }
     });
-    soundManager.onMuteChange((muted) => {
+    this.muteUnsubscribe = soundManager.onMuteChange((muted) => {
       if (muted) {
         stopValentineSpeech();
         stopCharacterSpeech();
@@ -385,7 +391,12 @@ export class PlayScene extends Phaser.Scene {
     const opponentName = this.opponentBarkSystem.getDisplayName();
     const opponentShort = getOpponentShortName(this.opponentId);
 
+    this.sceneRunId += 1;
     this.sceneTeardown = false;
+    this.isTransitioning = false;
+    this.lifecycleAbortController = new AbortController();
+    this.clearTrackedWindowTimers();
+    this.logLifecycle('scene created');
     this.relationshipMemory.clear();
     uiManager.showPlaying(this.ballId, ballName, opponentName, opponentShort);
     uiManager.setCallbacks({
@@ -530,6 +541,7 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private startMatchFlow(): void {
+    const runId = this.captureSceneRun();
     this.matchSystem.reset();
     this.scoring.reset();
     this.emotionDirector.onPlayStart();
@@ -555,16 +567,21 @@ export class PlayScene extends Phaser.Scene {
     uiManager.showMatchIntro(`${ballName} vs ${opponentName}`);
 
     this.time.delayedCall(600, () => {
+      if (!this.isSceneRunCurrent(runId)) return;
       if (this.gameState !== 'intro') return;
       this.fireOpponentBark('matchStart');
     });
 
     if (this.ballId === 'valentine') {
-      this.time.delayedCall(900, () => this.showValentineOpeningLineBeforeServe());
+      this.time.delayedCall(900, () => {
+        if (!this.isSceneRunCurrent(runId)) return;
+        this.showValentineOpeningLineBeforeServe();
+      });
       return;
     }
 
     this.time.delayedCall(900, () => {
+      if (!this.isSceneRunCurrent(runId)) return;
       if (this.gameState !== 'intro') return;
       const openingLine = getBallOpeningLineCue(this.ballId);
       uiManager.showBallComment(openingLine.text, this.STANDARD_OPENING_BUBBLE_MS, this.getBallScreenPosition());
@@ -572,6 +589,7 @@ export class PlayScene extends Phaser.Scene {
     });
 
     this.time.delayedCall(this.STANDARD_INTRO_TO_SERVE_MS, () => {
+      if (!this.isSceneRunCurrent(runId)) return;
       if (this.gameState !== 'intro') return;
       uiManager.hideMatchIntro();
       this.runServeCountdown();
@@ -580,26 +598,38 @@ export class PlayScene extends Phaser.Scene {
 
   private showValentineOpeningLineBeforeServe(): void {
     if (this.gameState !== 'intro') return;
-
-    void (async () => {
-      const openingLine = getBallOpeningLineCue(this.ballId);
-      await Promise.race([
-        speakValentineLine(openingLine.text, {
-          eventType: 'opening',
-          priority: 'high',
-          ballScreen: this.getBallScreenPosition(),
-          waitForPlayback: true,
-        }),
-        this.waitRealMs(this.OPENING_AUDIO_SAFE_MAX_MS),
-      ]);
-
+    const runId = this.captureSceneRun();
+    void this.speakValentineOpeningSafely(runId);
+    this.time.delayedCall(this.STANDARD_INTRO_TO_SERVE_MS, () => {
+      if (!this.isSceneRunCurrent(runId)) return;
       if (this.gameState !== 'intro') return;
       uiManager.hideMatchIntro();
       this.runServeCountdown();
-    })();
+    });
+  }
+
+  /** Fire-and-forget Valentine opening; never starts countdown. */
+  private async speakValentineOpeningSafely(runId: number): Promise<void> {
+    if (!this.isSceneRunCurrent(runId)) return;
+    const openingLine = getBallOpeningLineCue(this.ballId);
+    try {
+      await speakValentineLine(openingLine.text, {
+        eventType: 'opening',
+        priority: 'high',
+        ballScreen: this.getBallScreenPosition(),
+        waitForPlayback: false,
+        signal: this.lifecycleAbortController?.signal,
+      });
+    } catch {
+      /* text-only / cancelled — never gate intro */
+    }
+    if (!this.isSceneRunCurrent(runId)) {
+      this.logLifecycle('stale async continuation ignored', { runId, where: 'opening' });
+    }
   }
 
   private runServeCountdown(): void {
+    const runId = this.captureSceneRun();
     this.gameState = 'countdown';
     this.setEmotionalActionState('disabled');
     this.serveLock = true;
@@ -611,12 +641,14 @@ export class PlayScene extends Phaser.Scene {
     const stepMs = 450;
     steps.forEach((step, index) => {
       this.time.delayedCall(index * stepMs, () => {
+        if (!this.isSceneRunCurrent(runId)) return;
         if (this.gameState !== 'countdown') return;
         uiManager.showCountdown(step);
       });
     });
 
     this.time.delayedCall(steps.length * stepMs, () => {
+      if (!this.isSceneRunCurrent(runId)) return;
       if (this.gameState !== 'countdown') return;
       uiManager.hideCountdown();
       this.opponentBarkSystem.setCountdownActive(false);
@@ -646,6 +678,7 @@ export class PlayScene extends Phaser.Scene {
 
   private awardPoint(winner: 'player' | 'opponent'): void {
     if (this.gameState !== 'playing') return;
+    const runId = this.captureSceneRun();
 
     this.gameState = 'pointBreak';
     this.serveLock = true;
@@ -702,20 +735,25 @@ export class PlayScene extends Phaser.Scene {
     );
 
     if (this.matchSystem.isOver()) {
-      this.time.delayedCall(1200, () => this.endMatch());
+      this.time.delayedCall(1200, () => {
+        if (!this.isSceneRunCurrent(runId)) return;
+        this.endMatch();
+      });
     } else {
-      this.time.delayedCall(1200, () => this.runServeCountdown());
+      this.time.delayedCall(1200, () => {
+        if (!this.isSceneRunCurrent(runId)) return;
+        this.runServeCountdown();
+      });
     }
   }
 
   private endMatch(): void {
+    const runId = this.captureSceneRun();
     this.gameState = 'matchEnd';
-    this.cleanupActiveMatchSystems();
     this.serveLock = true;
     this.ballBody.setVelocity(0, 0);
-    this.time.timeScale = 1;
-    if (this.time.paused) this.time.paused = false;
-    if (this.physics.world.isPaused) this.physics.resume();
+    this.restorePhaserRuntime();
+    this.cleanupActiveMatchSystems();
     uiManager.hidePointFlash();
     uiManager.hideMatchOverlays();
 
@@ -732,27 +770,56 @@ export class PlayScene extends Phaser.Scene {
       this.personality.getStats()
     );
 
-    const showRecap = (): void => {
-      if (this.sceneTeardown) return;
-      uiManager.showMatchRecap(recap, {
-        onRematch: () => this.handleRecapRematch(),
-        onChangeBall: () => this.handleRecapChangeBall(),
-        onChangeOpponent: () => this.handleRecapChangeOpponent(),
-        onMainMenu: () => this.handleRecapMainMenu(),
-      });
-    };
+    // Recap is authoritative — never gated on speech/outro.
+    if (!this.isSceneRunCurrent(runId) || this.gameState !== 'matchEnd') return;
+    uiManager.showMatchRecap(recap, {
+      onRematch: () => this.handleRecapRematch(),
+      onChangeBall: () => this.handleRecapChangeBall(),
+      onChangeOpponent: () => this.handleRecapChangeOpponent(),
+      onMainMenu: () => this.handleRecapMainMenu(),
+    });
 
+    // Optional background outro; never blocks buttons or transitions.
     if (this.ballId === 'valentine') {
-      void this.finishValentineEndMatch(showRecap);
-      return;
+      void this.speakValentineOutroSafely(runId);
     }
+  }
 
-    showRecap();
+  /** Fire-and-forget post-match line; invalidated by rematch/menu transitions. */
+  private async speakValentineOutroSafely(runId: number): Promise<void> {
+    if (!this.isSceneRunCurrent(runId) || this.gameState !== 'matchEnd') return;
+    try {
+      const result = await this.awaitValentineGeneration(
+        requestValentineVoice({
+          eventType: 'postMatch',
+          gameState: this.buildValentineVoiceGameState(),
+          recentLines: this.valentineRecentLines,
+        })
+      );
+      if (!this.isSceneRunCurrent(runId) || this.gameState !== 'matchEnd') {
+        this.logLifecycle('stale async continuation ignored', { runId, where: 'outro:gen' });
+        return;
+      }
+      const text = result?.text ?? VALENTINE_THINKING_FAILURE_LINE;
+      await speakValentineLine(text, {
+        eventType: 'postMatch',
+        priority: 'high',
+        ballScreen: this.getBallScreenPosition(),
+        waitForPlayback: false,
+        signal: this.lifecycleAbortController?.signal,
+      });
+    } catch {
+      /* text-only / cancelled — never gate UI */
+    }
+    if (!this.isSceneRunCurrent(runId)) {
+      this.logLifecycle('stale async continuation ignored', { runId, where: 'outro' });
+    }
   }
 
   /**
    * Stop in-flight combat/audio/UI so match-end navigation cannot be blocked
    * by beams, VoiceDirector, captions, or leftover DOM layers.
+   * Idempotent; does not fire cancel hooks, start speech/barks, or transition.
    */
   private cleanupActiveMatchSystems(): void {
     this.setEmotionalActionState('disabled');
@@ -762,6 +829,7 @@ export class PlayScene extends Phaser.Scene {
     voiceDirector.setCurrentInteractionId(null);
     this.emotionalLoadoutController?.cancel();
     this.emotionalDelivery?.hardReset();
+    this.clearTrackedWindowTimers();
     this.stopValentineThinking();
     stopValentineSpeech();
     stopCharacterSpeech();
@@ -776,42 +844,23 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private handleRecapRematch(): void {
-    const ballId = this.ballId;
-    const playerSide = this.playerSide;
-    const opponentId = this.opponentId;
-    this.cleanupActiveMatchSystems();
-    uiManager.hideMatchRecap();
-    this.scene.restart({ ballId, playerSide, opponentId });
+    this.transitionToScene(
+      'PlayScene',
+      { ballId: this.ballId, playerSide: this.playerSide, opponentId: this.opponentId },
+      'restart'
+    );
   }
 
   private handleRecapChangeBall(): void {
-    this.cleanupActiveMatchSystems();
-    uiManager.hideMatchRecap();
-    this.scene.start('MenuScene');
+    this.transitionToScene('MenuScene');
   }
 
   private handleRecapChangeOpponent(): void {
-    this.cleanupActiveMatchSystems();
-    uiManager.hideMatchRecap();
-    this.scene.start('MenuScene', { focusOpponent: true });
+    this.transitionToScene('MenuScene', { focusOpponent: true });
   }
 
   private handleRecapMainMenu(): void {
-    this.cleanupActiveMatchSystems();
-    uiManager.hideMatchRecap();
-    this.scene.start('MenuScene');
-  }
-
-  private async finishValentineEndMatch(showRecap: () => void): Promise<void> {
-    try {
-      await Promise.race([
-        this.playValentineDynamicMoment('postMatch'),
-        this.waitRealMs(4000),
-      ]);
-    } finally {
-      this.cleanupActiveMatchSystems();
-      showRecap();
-    }
+    this.transitionToScene('MenuScene');
   }
 
   private setupMousePaddleInput(): void {
@@ -836,10 +885,34 @@ export class PlayScene extends Phaser.Scene {
       if (client) trackPointer(client.x, client.y);
     });
 
-    window.addEventListener('mousemove', (event) => {
+    if (this.onMouseMoveBound) {
+      window.removeEventListener('mousemove', this.onMouseMoveBound);
+    }
+    if (this.onMouseLeaveBound) {
+      window.removeEventListener('mouseleave', this.onMouseLeaveBound);
+    }
+
+    this.onMouseMoveBound = (event: MouseEvent) => {
       if (this.gameState !== 'playing' || this.isPaused) return;
       trackPointer(event.clientX, event.clientY);
-    });
+    };
+    this.onMouseLeaveBound = () => {
+      this.mouseOnGameViewport = false;
+    };
+
+    window.addEventListener('mousemove', this.onMouseMoveBound);
+    window.addEventListener('mouseleave', this.onMouseLeaveBound);
+  }
+
+  private removeMousePaddleListeners(): void {
+    if (this.onMouseMoveBound) {
+      window.removeEventListener('mousemove', this.onMouseMoveBound);
+      this.onMouseMoveBound = null;
+    }
+    if (this.onMouseLeaveBound) {
+      window.removeEventListener('mouseleave', this.onMouseLeaveBound);
+      this.onMouseLeaveBound = null;
+    }
   }
 
   private getPointerClientPosition(
@@ -1549,28 +1622,31 @@ export class PlayScene extends Phaser.Scene {
     this.emotionalDelivery?.setCooldownProgress(progress);
   }
 
-  private resetEmotionalInventoryInteraction(): void {
-    this.emotionalInteractionId += 1;
-    this.currentEmotionalActionId = null;
-    this.pendingEmotionalResolution = null;
-    this.emotionalCooldownUntil = 0;
-    voiceDirector.setCurrentInteractionId(null);
-    this.emotionalLoadoutController?.cancel();
-    this.emotionalDelivery?.hardReset();
-    uiManager.clearPendingEmotionalMode();
-    uiManager.setEmotionalCooldownProgress(0);
-    this.setEmotionalActionState(
-      this.sceneTeardown || this.gameState === 'matchEnd' ? 'disabled' : 'available'
-    );
-  }
+  /** Idempotent full PlayScene shutdown used by SHUTDOWN/DESTROY. */
+  private teardownPlayScene(reason: 'shutdown' | 'destroy'): void {
+    if (this.sceneTeardown && !this.emotionalDelivery) {
+      this.logLifecycle(`teardownPlayScene (${reason}) — already torn down`);
+      return;
+    }
 
-  private teardownEmotionalCombat(): void {
-    if (this.sceneTeardown && !this.emotionalDelivery) return;
     this.sceneTeardown = true;
+    this.isTransitioning = true;
+    this.invalidateSceneRun();
+    this.clearTrackedWindowTimers();
+    this.restorePhaserRuntime();
+    this.cleanupActiveMatchSystems();
+
     this.teardownEmotionalLoadoutKeyboard();
+    this.removeMousePaddleListeners();
+    if (this.muteUnsubscribe) {
+      this.muteUnsubscribe();
+      this.muteUnsubscribe = null;
+    }
+
     this.pendingEmotionalResolution = null;
     this.currentEmotionalActionId = null;
     this.emotionalLoadoutController?.cancel();
+    this.emotionalLoadoutController = null;
     this.emotionalDelivery?.hardReset();
     this.emotionalDelivery?.destroy();
     this.emotionalDelivery = null;
@@ -1578,11 +1654,13 @@ export class PlayScene extends Phaser.Scene {
     uiManager.setEmotionalCooldownProgress(0);
     this.emotionalActionState = 'disabled';
     uiManager.setEmotionalActionState('disabled');
+    uiManager.clearGameCallbacks();
     this.teardownSpeechVisuals();
     this.stopValentineThinking();
     uiManager.hideSpeechCaption();
     voiceDirector.stopAll();
     voiceDirector.setCurrentInteractionId(null);
+    this.logLifecycle(`teardownPlayScene (${reason})`);
   }
 
   private setupEmotionalDelivery(): void {
@@ -1605,6 +1683,7 @@ export class PlayScene extends Phaser.Scene {
   private isEmotionalActionCurrent(actionId: string): boolean {
     return (
       !this.sceneTeardown &&
+      !this.isTransitioning &&
       this.gameState !== 'matchEnd' &&
       this.currentEmotionalActionId === actionId
     );
@@ -1683,23 +1762,26 @@ export class PlayScene extends Phaser.Scene {
     this.logLoadoutKey('Mode selection accepted', { modeId, inputSource, actionId });
 
     // Start OpenAI early; speech held until absorption resolves.
-    this.emotionalLoadoutController?.primeFlavor({
-      actionId,
-      loadout: mode.id,
-      targetBallId: target.ballId,
-      targetDisplayName: target.displayName,
-      triggeringEvent: this.currentEvent?.situation ?? 'rallyCombat',
-      recentDialogue: [
-        ...this.relationshipMemory.getRecentDialogueHints(5),
-        ...this.recentEvents.slice(-3),
-      ],
-      relationshipSnapshot: { ...this.personality.getStats() },
-      emotionalStateSnapshot: {
-        mood: this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId),
-        rally: rallyNumber,
+    this.emotionalLoadoutController?.primeFlavor(
+      {
+        actionId,
+        loadout: mode.id,
+        targetBallId: target.ballId,
+        targetDisplayName: target.displayName,
+        triggeringEvent: this.currentEvent?.situation ?? 'rallyCombat',
+        recentDialogue: [
+          ...this.relationshipMemory.getRecentDialogueHints(5),
+          ...this.recentEvents.slice(-3),
+        ],
+        relationshipSnapshot: { ...this.personality.getStats() },
+        emotionalStateSnapshot: {
+          mood: this.emotionDirector.getMoodLabel(this.personality.getStats(), this.ballId),
+          rally: rallyNumber,
+        },
+        patternSummary: this.relationshipMemory.getPatternSummary(),
       },
-      patternSummary: this.relationshipMemory.getPatternSummary(),
-    });
+      this.lifecycleAbortController?.signal
+    );
   }
 
   /** Deterministic resolution after beam absorption — never driven by OpenAI/TTS. */
@@ -1873,10 +1955,120 @@ export class PlayScene extends Phaser.Scene {
     this.valentineRecentLines = [line, ...this.valentineRecentLines].slice(0, 5);
   }
 
-  private waitRealMs(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      window.setTimeout(resolve, ms);
-    });
+  private logLifecycle(message: string, details?: Record<string, unknown>): void {
+    if (!import.meta.env.DEV) return;
+    const payload = {
+      sceneRunId: this.sceneRunId,
+      gameState: this.gameState,
+      isPaused: this.isPaused,
+      sceneTeardown: this.sceneTeardown,
+      isTransitioning: this.isTransitioning,
+      timePaused: this.time?.paused,
+      timeScale: this.time?.timeScale,
+      physicsPaused: this.physics?.world?.isPaused,
+      emotionalDeliveryState: this.emotionalDelivery?.getState?.(),
+      activeVoiceRequestId: voiceDirector.getActiveRequestId?.(),
+      ...details,
+    };
+    console.log(`[Lifecycle] ${message}`, payload);
+  }
+
+  private captureSceneRun(): number {
+    return this.sceneRunId;
+  }
+
+  private isSceneRunCurrent(runId: number): boolean {
+    return (
+      runId === this.sceneRunId &&
+      !this.sceneTeardown &&
+      !this.isTransitioning &&
+      this.scene.isActive() &&
+      !this.lifecycleAbortController?.signal.aborted
+    );
+  }
+
+  private invalidateSceneRun(): void {
+    this.sceneRunId += 1;
+    try {
+      this.lifecycleAbortController?.abort();
+    } catch {
+      /* already aborted */
+    }
+    this.logLifecycle('scene run invalidated');
+  }
+
+  private beginSceneTransition(targetScene: string): boolean {
+    if (this.isTransitioning || this.sceneTeardown) {
+      this.logLifecycle('transition ignored', { targetScene });
+      return false;
+    }
+    this.isTransitioning = true;
+    this.invalidateSceneRun();
+    this.lifecycleAbortController?.abort();
+    this.logLifecycle('transition requested', { targetScene });
+    return true;
+  }
+
+  private restorePhaserRuntime(): void {
+    try {
+      if (this.time) {
+        this.time.paused = false;
+        this.time.timeScale = 1;
+      }
+      if (this.physics?.world?.isPaused) {
+        this.physics.resume();
+      }
+      this.isPaused = false;
+      this.emotionDirector?.resumeTimers();
+      this.opponentBarkSystem?.resumeTimers();
+    } catch {
+      /* scene may be mid-destroy */
+    }
+  }
+
+  private clearTrackedWindowTimers(): void {
+    for (const id of this.trackedWindowTimers) {
+      window.clearTimeout(id);
+    }
+    this.trackedWindowTimers.clear();
+    this.valentineThinkingRotationTimer = null;
+    this.valentineThinkingNotesTimer = null;
+  }
+
+  private scheduleWindowTimer(cb: () => void, delayMs: number): number {
+    const id = window.setTimeout(() => {
+      this.trackedWindowTimers.delete(id);
+      cb();
+    }, delayMs);
+    this.trackedWindowTimers.add(id);
+    return id;
+  }
+
+  private async waitRealMs(ms: number): Promise<boolean> {
+    return waitForDelay(ms, this.lifecycleAbortController?.signal);
+  }
+
+  private transitionToScene(
+    sceneKey: string,
+    data?: object,
+    mode: 'start' | 'restart' = 'start'
+  ): void {
+    if (!this.beginSceneTransition(sceneKey)) return;
+    this.restorePhaserRuntime();
+    this.logLifecycle('cleanup started', { sceneKey });
+    this.cleanupActiveMatchSystems();
+    this.hoverMorph?.forceRestore();
+    uiManager.hideMatchOverlays();
+    uiManager.hideMatchRecap();
+    uiManager.resetGameControls();
+    uiManager.clearGameCallbacks();
+    this.logLifecycle('cleanup completed', { sceneKey });
+    this.logLifecycle('scene start called', { sceneKey, mode, data });
+    if (mode === 'restart') {
+      this.scene.restart(data);
+    } else {
+      this.scene.start(sceneKey, data);
+    }
   }
 
   /**
@@ -1895,10 +2087,11 @@ export class PlayScene extends Phaser.Scene {
 
     this.scheduleValentineThinkingRotation();
 
-    this.valentineThinkingNotesTimer = window.setTimeout(() => {
+    this.valentineThinkingNotesTimer = this.scheduleWindowTimer(() => {
       uiManager.setValentineThinkingMessage(VALENTINE_THINKING_NOTES_MESSAGE);
       if (this.valentineThinkingRotationTimer !== null) {
         window.clearTimeout(this.valentineThinkingRotationTimer);
+        this.trackedWindowTimers.delete(this.valentineThinkingRotationTimer);
         this.valentineThinkingRotationTimer = null;
       }
     }, this.VALENTINE_THINKING_NOTES_MS);
@@ -1908,7 +2101,7 @@ export class PlayScene extends Phaser.Scene {
     const interval =
       this.VALENTINE_THINKING_ROTATE_MIN_MS +
       Math.random() * (this.VALENTINE_THINKING_ROTATE_MAX_MS - this.VALENTINE_THINKING_ROTATE_MIN_MS);
-    this.valentineThinkingRotationTimer = window.setTimeout(() => {
+    this.valentineThinkingRotationTimer = this.scheduleWindowTimer(() => {
       this.rotateValentineThinkingMessage();
       this.scheduleValentineThinkingRotation();
     }, interval);
@@ -1929,10 +2122,12 @@ export class PlayScene extends Phaser.Scene {
   private stopValentineThinking(): void {
     if (this.valentineThinkingRotationTimer !== null) {
       window.clearTimeout(this.valentineThinkingRotationTimer);
+      this.trackedWindowTimers.delete(this.valentineThinkingRotationTimer);
       this.valentineThinkingRotationTimer = null;
     }
     if (this.valentineThinkingNotesTimer !== null) {
       window.clearTimeout(this.valentineThinkingNotesTimer);
+      this.trackedWindowTimers.delete(this.valentineThinkingNotesTimer);
       this.valentineThinkingNotesTimer = null;
     }
     uiManager.clearValentineThinking();
@@ -1962,6 +2157,7 @@ export class PlayScene extends Phaser.Scene {
       waitForBubble?: boolean;
     }
   ): Promise<void> {
+    const runId = this.captureSceneRun();
     const payload = {
       eventType,
       playerText: options?.playerText,
@@ -1971,7 +2167,18 @@ export class PlayScene extends Phaser.Scene {
 
     this.startValentineThinking();
     const result = await this.awaitValentineGeneration(requestValentineVoice(payload));
+    if (!this.isSceneRunCurrent(runId)) {
+      this.stopValentineThinking();
+      this.logLifecycle('stale async continuation ignored', { runId, where: 'dynamicMoment:gen' });
+      return;
+    }
+
     await this.ensureMinThinkingTime();
+    if (!this.isSceneRunCurrent(runId)) {
+      this.stopValentineThinking();
+      this.logLifecycle('stale async continuation ignored', { runId, where: 'dynamicMoment:think' });
+      return;
+    }
     this.stopValentineThinking();
 
     if (options?.showDialogueResult) {
@@ -1988,7 +2195,12 @@ export class PlayScene extends Phaser.Scene {
       priority: 'high',
       ballScreen: this.getBallScreenPosition(),
       waitForPlayback: options?.waitForBubble !== false,
+      signal: this.lifecycleAbortController?.signal,
     });
+    if (!this.isSceneRunCurrent(runId)) {
+      this.logLifecycle('stale async continuation ignored', { runId, where: 'dynamicMoment:speech' });
+      return;
+    }
     this.recordValentineLine(speechResult.text);
 
     if (!speechResult.ok && import.meta.env.DEV) {
@@ -1997,7 +2209,9 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private async triggerValentineOutburst(): Promise<void> {
+    const runId = this.captureSceneRun();
     if (this.valentineOutburstInFlight || this.gameState !== 'playing') return;
+    if (!this.isSceneRunCurrent(runId)) return;
 
     const payload = {
       eventType: 'outburst' as const,
@@ -2012,7 +2226,12 @@ export class PlayScene extends Phaser.Scene {
     try {
       await this.playValentineDynamicMoment('outburst', { waitForBubble: false });
     } finally {
-      this.valentineOutburstInFlight = false;
+      if (this.isSceneRunCurrent(runId)) {
+        this.valentineOutburstInFlight = false;
+      } else {
+        this.valentineOutburstInFlight = false;
+        this.logLifecycle('stale async continuation ignored', { runId, where: 'outburst' });
+      }
     }
   }
 
@@ -2157,7 +2376,7 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private togglePause(): void {
-    if (this.gameState === 'matchEnd') return;
+    if (this.gameState === 'matchEnd' || this.sceneTeardown || this.isTransitioning) return;
     if (this.isPaused) {
       this.resumeGame();
     } else {
@@ -2167,10 +2386,11 @@ export class PlayScene extends Phaser.Scene {
 
   private pauseGame(): void {
     if (this.isPaused || this.gameState === 'matchEnd') return;
+    if (this.sceneTeardown || this.isTransitioning) return;
 
+    const runId = this.captureSceneRun();
     this.isPaused = true;
-    this.pausedTimeScale = this.time.timeScale;
-    this.time.timeScale = 0;
+    this.time.timeScale = 1;
 
     if (this.gameState === 'playing') {
       this.storedVelocity.x = this.ballBody.velocity.x;
@@ -2185,16 +2405,20 @@ export class PlayScene extends Phaser.Scene {
     uiManager.setPaused(true);
     this.setEmotionalActionState('disabled');
     this.syncUILayout();
-    this.fireOpponentBark('pausePressed');
+    this.logLifecycle('pause');
+    if (this.isSceneRunCurrent(runId)) {
+      this.fireOpponentBark('pausePressed');
+    }
   }
 
   private resumeGame(): void {
-    if (!this.isPaused) return;
+    if (!this.isPaused || this.sceneTeardown || this.isTransitioning) return;
 
-    this.isPaused = false;
-    this.time.timeScale = this.pausedTimeScale;
-    this.physics.resume();
+    const runId = this.captureSceneRun();
     this.time.paused = false;
+    this.physics.resume();
+    this.isPaused = false;
+    this.time.timeScale = 1;
     this.emotionDirector.resumeTimers();
     this.opponentBarkSystem.resumeTimers();
     uiManager.setPaused(false);
@@ -2207,8 +2431,13 @@ export class PlayScene extends Phaser.Scene {
       this.setEmotionalActionState('cooldown');
     }
     this.syncUILayout();
+    this.logLifecycle('resume');
 
-    if (this.gameState === 'playing') {
+    if (
+      this.gameState === 'playing' &&
+      this.isSceneRunCurrent(runId) &&
+      !this.isTransitioning
+    ) {
       const speed = Math.abs(this.storedVelocity.x) + Math.abs(this.storedVelocity.y);
       if (speed > 10) {
         this.ballBody.setVelocity(this.storedVelocity.x, this.storedVelocity.y);
@@ -2217,23 +2446,6 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private quitToMenu(): void {
-    this.fireOpponentBark('quitPressed');
-    this.cleanupActiveMatchSystems();
-    this.resetEmotionalInventoryInteraction();
-
-    if (this.isPaused) {
-      this.time.paused = false;
-      this.physics.resume();
-      this.emotionDirector.resumeTimers();
-      this.opponentBarkSystem.resumeTimers();
-      this.isPaused = false;
-    }
-
-    this.time.timeScale = 1;
-    this.hoverMorph.forceRestore();
-    uiManager.hideMatchOverlays();
-    uiManager.hideMatchRecap();
-    uiManager.resetGameControls();
-    this.scene.start('MenuScene');
+    this.transitionToScene('MenuScene');
   }
 }
