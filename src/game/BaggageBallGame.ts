@@ -4,9 +4,10 @@ import { GAME_LAYOUT } from './layout/GameLayout';
 import { MenuScene } from './scenes/MenuScene';
 import { PlayScene } from './scenes/PlayScene';
 import { RecapScene } from './scenes/RecapScene';
+import { gameNavigation } from './navigation/GameNavigationController';
 
 export function createBaggageBallGame(parent: string): Phaser.Game {
-  return new Phaser.Game({
+  const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent,
     width: GAME_LAYOUT.CANVAS_WIDTH,
@@ -25,4 +26,8 @@ export function createBaggageBallGame(parent: string): Phaser.Game {
       autoCenter: Phaser.Scale.CENTER_BOTH,
     },
   });
+
+  // One navigation owner for the whole app — not per scene.
+  gameNavigation.bindGame(game);
+  return game;
 }

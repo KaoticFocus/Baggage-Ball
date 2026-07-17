@@ -23,6 +23,10 @@ import { formatStatLabel } from '../game/systems/RecapSystem';
 import type { MatchRecapData } from '../game/systems/MatchRecapSystem';
 import type { BallStats } from '../game/types/BallTypes';
 import { STAT_KEYS } from '../game/types/BallTypes';
+import type {
+  MainMenuOptions,
+  MatchStartData,
+} from '../game/navigation/GameNavigationController';
 import {
   truncateHoverText,
   type ScreenBounds,
@@ -65,12 +69,13 @@ export class UIManager {
   private onEmotionalResponseSelected?: (mode: EmotionalResponseMode) => void;
   private onCustomResponseRequested?: () => void;
   private onCustomResponseSubmitted?: (text: string) => void;
-  private onRecapRematch?: () => void;
-  private onRecapChangeBall?: () => void;
-  private onRecapChangeOpponent?: () => void;
-  private onRecapMenu?: () => void;
   private onPauseToggle?: () => void;
-  private onQuit?: () => void;
+  /** Stable app-level navigation — set once at boot, never from PlayScene. */
+  private goToMainMenuAction?: (options?: MainMenuOptions) => void;
+  private startMatchAction?: (data: MatchStartData) => void;
+  private restartMatchAction?: (data: MatchStartData) => void;
+  /** Last completed match — used by Rematch without PlayScene closures. */
+  private lastRecapMatch: MatchStartData | null = null;
   private statsPanel = document.getElementById('stats-panel')!;
   private emotionalInventory = document.getElementById('emotional-inventory')!;
   private hudControlsEl = document.querySelector('.hud-controls') as HTMLElement;
@@ -133,16 +138,28 @@ export class UIManager {
     });
 
     document.getElementById('recap-rematch')!.addEventListener('click', () => {
-      this.onRecapRematch?.();
+      if (import.meta.env.DEV) {
+        console.log('[Navigation] Rematch DOM click');
+      }
+      this.handleRecapRematchClick();
     });
     document.getElementById('recap-change-ball')!.addEventListener('click', () => {
-      this.onRecapChangeBall?.();
+      if (import.meta.env.DEV) {
+        console.log('[Navigation] Change Ball DOM click');
+      }
+      this.goToMainMenuAction?.();
     });
     document.getElementById('recap-change-opponent')!.addEventListener('click', () => {
-      this.onRecapChangeOpponent?.();
+      if (import.meta.env.DEV) {
+        console.log('[Navigation] Change Opponent DOM click');
+      }
+      this.goToMainMenuAction?.({ focusOpponent: true });
     });
     document.getElementById('recap-menu')!.addEventListener('click', () => {
-      this.onRecapMenu?.();
+      if (import.meta.env.DEV) {
+        console.log('[Navigation] Main Menu DOM click');
+      }
+      this.goToMainMenuAction?.();
     });
 
     document.getElementById('text-response-submit')!.addEventListener('click', () => {
@@ -161,10 +178,10 @@ export class UIManager {
     this.pauseBtn.addEventListener('click', () => this.onPauseToggle?.());
     document.getElementById('hud-quit-btn')!.addEventListener('click', () => {
       if (import.meta.env.DEV) {
-        console.log('[UI] Quit button DOM click');
-        console.log('[UI] Quit callback present', Boolean(this.onQuit));
+        console.log('[Navigation] Quit DOM click');
       }
-      this.onQuit?.();
+      // Quit and Main Menu share the same app-level navigation path.
+      this.goToMainMenuAction?.();
     });
     this.renderEmotionalInventoryOnce();
     this.setEmotionalActionState('disabled');
@@ -176,12 +193,7 @@ export class UIManager {
     onEmotionalResponseSelected?: (mode: EmotionalResponseMode) => void;
     onCustomResponseRequested?: () => void;
     onCustomResponseSubmitted?: (text: string) => void;
-    onRecapRematch?: () => void;
-    onRecapChangeBall?: () => void;
-    onRecapChangeOpponent?: () => void;
-    onRecapMenu?: () => void;
     onPauseToggle?: () => void;
-    onQuit?: () => void;
   }): void {
     if (callbacks.onBallSelected !== undefined) this.onBallSelected = callbacks.onBallSelected;
     if (callbacks.onEmotionalResponseSelected !== undefined) {
@@ -193,35 +205,47 @@ export class UIManager {
     if (callbacks.onCustomResponseSubmitted !== undefined) {
       this.onCustomResponseSubmitted = callbacks.onCustomResponseSubmitted;
     }
-    if (callbacks.onRecapRematch !== undefined) this.onRecapRematch = callbacks.onRecapRematch;
-    if (callbacks.onRecapChangeBall !== undefined) this.onRecapChangeBall = callbacks.onRecapChangeBall;
-    if (callbacks.onRecapChangeOpponent !== undefined) {
-      this.onRecapChangeOpponent = callbacks.onRecapChangeOpponent;
-    }
-    if (callbacks.onRecapMenu !== undefined) this.onRecapMenu = callbacks.onRecapMenu;
     if (callbacks.onPauseToggle !== undefined) this.onPauseToggle = callbacks.onPauseToggle;
-    if (callbacks.onQuit !== undefined) this.onQuit = callbacks.onQuit;
+  }
+
+  /**
+   * Inject stable application-level navigation once at boot.
+   * Do not replace these from PlayScene.
+   */
+  setNavigationActions(actions: {
+    goToMainMenu: (options?: MainMenuOptions) => void;
+    startMatch: (data: MatchStartData) => void;
+    restartMatch: (data: MatchStartData) => void;
+  }): void {
+    this.goToMainMenuAction = actions.goToMainMenu;
+    this.startMatchAction = actions.startMatch;
+    this.restartMatchAction = actions.restartMatch;
   }
 
   setGameControlCallbacks(callbacks: {
     onPauseToggle?: () => void;
-    onQuit?: () => void;
   }): void {
     if (callbacks.onPauseToggle !== undefined) this.onPauseToggle = callbacks.onPauseToggle;
-    if (callbacks.onQuit !== undefined) this.onQuit = callbacks.onQuit;
   }
 
-  /** Drop PlayScene-owned callbacks so a destroyed scene cannot receive UI events. */
+  /** Drop PlayScene-owned gameplay callbacks. Does not clear app-level navigation. */
   clearGameCallbacks(): void {
     this.onPauseToggle = undefined;
-    this.onQuit = undefined;
     this.onEmotionalResponseSelected = undefined;
     this.onCustomResponseRequested = undefined;
     this.onCustomResponseSubmitted = undefined;
-    this.onRecapRematch = undefined;
-    this.onRecapChangeBall = undefined;
-    this.onRecapChangeOpponent = undefined;
-    this.onRecapMenu = undefined;
+  }
+
+  private handleRecapRematchClick(): void {
+    const match = this.lastRecapMatch;
+    if (!match) {
+      if (import.meta.env.DEV) {
+        console.warn('[Navigation] Rematch clicked with no stored match data');
+      }
+      this.goToMainMenuAction?.();
+      return;
+    }
+    this.restartMatchAction?.(match);
   }
 
   setPaused(paused: boolean): void {
@@ -441,8 +465,17 @@ export class UIManager {
   }
 
   private handleBallSelect(ballId: string): void {
+    const data = {
+      ballId,
+      playerSide: this.selectedPaddleSide,
+      opponentId: this.selectedOpponentId,
+    };
+    if (this.startMatchAction) {
+      this.startMatchAction(data);
+      return;
+    }
     if (this.ballSelectHandler) {
-      this.ballSelectHandler(ballId, this.selectedPaddleSide, this.selectedOpponentId);
+      this.ballSelectHandler(data.ballId, data.playerSide, data.opponentId);
       return;
     }
     this.onBallSelected?.(ballId);
@@ -493,6 +526,7 @@ export class UIManager {
     this.renderBallSelect();
     this.renderOpponentSelect();
     this.menuOverlay.classList.remove('hidden');
+    this.menuOverlay.style.pointerEvents = 'auto';
     this.hud.classList.add('hidden');
     this.statsPanel.classList.add('hidden');
     this.hideEmotionalInventory();
@@ -506,6 +540,7 @@ export class UIManager {
     this.pauseBanner.classList.add('hidden');
     this.resetGameControls();
     // Drop any destroyed PlayScene callbacks — menu must not depend on PlayScene teardown.
+    // Does not clear app-level navigation actions.
     this.clearGameCallbacks();
     if (options?.focusOpponent) {
       requestAnimationFrame(() => {
@@ -1158,13 +1193,20 @@ export class UIManager {
 
   showMatchRecap(
     data: MatchRecapData,
-    callbacks: {
+    _callbacks?: {
       onRematch?: () => void;
       onChangeBall?: () => void;
       onChangeOpponent?: () => void;
       onMainMenu?: () => void;
     }
   ): void {
+    // Store match identity for Rematch — navigation is app-level, not PlayScene closures.
+    this.lastRecapMatch = {
+      ballId: data.ballId,
+      playerSide: getPlayerPaddleSide(),
+      opponentId: data.opponentId,
+    };
+
     this.hud.classList.add('hidden');
     this.statsPanel.classList.add('hidden');
     this.hideEmotionalInventory();
@@ -1176,18 +1218,14 @@ export class UIManager {
     this.hideSpeechCaption();
     this.menuOverlay.classList.add('hidden');
     this.recapOverlay.classList.remove('hidden');
+    this.recapOverlay.style.pointerEvents = 'auto';
     // Ensure the action row is reachable even when the diagnosis text is long.
     requestAnimationFrame(() => {
       const actions = this.recapOverlay.querySelector('.match-recap-actions');
       actions?.scrollIntoView({ block: 'nearest' });
     });
 
-    if (callbacks.onRematch !== undefined) this.onRecapRematch = callbacks.onRematch;
-    if (callbacks.onChangeBall !== undefined) this.onRecapChangeBall = callbacks.onChangeBall;
-    if (callbacks.onChangeOpponent !== undefined) {
-      this.onRecapChangeOpponent = callbacks.onChangeOpponent;
-    }
-    if (callbacks.onMainMenu !== undefined) this.onRecapMenu = callbacks.onMainMenu;
+    // Legacy callback args are ignored — DOM listeners use GameNavigationController.
 
     const title =
       data.winner === 'player' ? 'You Win!' : `${data.opponentShortName} Wins`;

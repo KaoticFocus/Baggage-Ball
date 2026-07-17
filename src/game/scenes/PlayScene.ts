@@ -215,7 +215,6 @@ export class PlayScene extends Phaser.Scene {
   private onMouseLeaveBound: (() => void) | null = null;
   private sceneTeardown = false;
   private teardownCompleted = false;
-  private fallbackTransitionAttempted = false;
   private readonly onEmotionalLoadoutKeyDown = (event: KeyboardEvent): void => {
     this.handleEmotionalLoadoutKeyDown(event);
   };
@@ -396,7 +395,6 @@ export class PlayScene extends Phaser.Scene {
     this.sceneRunId += 1;
     this.sceneTeardown = false;
     this.teardownCompleted = false;
-    this.fallbackTransitionAttempted = false;
     this.isTransitioning = false;
     this.lifecycleAbortController = new AbortController();
     this.clearTrackedWindowTimers();
@@ -421,7 +419,6 @@ export class PlayScene extends Phaser.Scene {
     this.setEmotionalActionState('available');
     uiManager.setGameControlCallbacks({
       onPauseToggle: () => this.togglePause(),
-      onQuit: () => this.quitToMenu(),
     });
     this.updateUI();
     this.syncUILayout();
@@ -774,14 +771,10 @@ export class PlayScene extends Phaser.Scene {
       this.personality.getStats()
     );
 
-    // Recap is authoritative — never gated on speech/outro.
+    // Recap actions (Main Menu / Quit / Rematch) are owned by GameNavigationController
+    // via permanent UIManager DOM listeners — not PlayScene closures.
     if (!this.isSceneRunCurrent(runId) || this.gameState !== 'matchEnd') return;
-    uiManager.showMatchRecap(recap, {
-      onRematch: () => this.handleRecapRematch(),
-      onChangeBall: () => this.handleRecapChangeBall(),
-      onChangeOpponent: () => this.handleRecapChangeOpponent(),
-      onMainMenu: () => this.handleRecapMainMenu(),
-    });
+    uiManager.showMatchRecap(recap);
 
     // Optional background outro; never blocks buttons or transitions.
     if (this.ballId === 'valentine') {
@@ -884,26 +877,6 @@ export class PlayScene extends Phaser.Scene {
     this.safeCleanupStep(`setEmotionalActionState(${state})`, () => {
       this.setEmotionalActionState(state);
     });
-  }
-
-  private handleRecapRematch(): void {
-    this.transitionToScene(
-      'PlayScene',
-      { ballId: this.ballId, playerSide: this.playerSide, opponentId: this.opponentId },
-      'restart'
-    );
-  }
-
-  private handleRecapChangeBall(): void {
-    this.transitionToScene('MenuScene');
-  }
-
-  private handleRecapChangeOpponent(): void {
-    this.transitionToScene('MenuScene', { focusOpponent: true });
-  }
-
-  private handleRecapMainMenu(): void {
-    this.transitionToScene('MenuScene');
   }
 
   private setupMousePaddleInput(): void {
@@ -2100,32 +2073,6 @@ export class PlayScene extends Phaser.Scene {
     this.logLifecycle('scene run invalidated');
   }
 
-  private beginSceneTransition(targetScene: string): boolean {
-    if (this.isTransitioning || this.sceneTeardown) {
-      this.logLifecycle('transition ignored', { targetScene });
-      return false;
-    }
-
-    this.isTransitioning = true;
-
-    try {
-      this.invalidateSceneRun();
-    } catch (error) {
-      console.error('[Lifecycle] scene invalidation failed', error);
-    }
-
-    try {
-      this.lifecycleAbortController?.abort();
-    } catch (error) {
-      console.error('[Lifecycle] lifecycle abort failed', error);
-    }
-
-    this.setEmotionalActionStateSafely('disabled');
-    this.logLifecycle('transition requested', { targetScene });
-    this.logQuitStage('transition requested');
-    return true;
-  }
-
   private restorePhaserRuntime(): void {
     this.restorePhaserRuntimeSafely();
   }
@@ -2173,110 +2120,6 @@ export class PlayScene extends Phaser.Scene {
 
   private async waitRealMs(ms: number): Promise<boolean> {
     return waitForDelay(ms, this.lifecycleAbortController?.signal);
-  }
-
-  /**
-   * Navigation-only transition. Deep cleanup belongs in SHUTDOWN.
-   * Cleanup must never be able to block scene.start().
-   */
-  private transitionToScene(
-    sceneKey: string,
-    data?: object,
-    mode: 'start' | 'restart' = 'start'
-  ): void {
-    if (!this.beginSceneTransition(sceneKey)) return;
-
-    this.restorePhaserRuntimeSafely();
-
-    // Hide only the most immediate overlays — fail-open, never block navigation.
-    this.safeCleanupStep('hide immediate overlays', () => {
-      uiManager.hideMatchOverlays();
-      uiManager.hideMatchRecap();
-      uiManager.setPaused(false);
-    });
-
-    this.logLifecycle('scene start called', { sceneKey, mode, data });
-    this.logQuitStage('scene.start called');
-
-    try {
-      if (mode === 'restart') {
-        this.scene.restart(data);
-      } else {
-        this.scene.start(sceneKey, data);
-      }
-    } catch (error) {
-      console.error('[Lifecycle] primary scene transition failed', {
-        sceneKey,
-        mode,
-        error,
-      });
-      this.forceSceneTransition(sceneKey, data, mode);
-      return;
-    }
-
-    // Diagnostic/fallback watchdog — not the primary transition mechanism.
-    if (sceneKey === 'MenuScene') {
-      requestAnimationFrame(() => {
-        try {
-          const menuActive = this.game.scene.isActive('MenuScene');
-          const playActive = this.game.scene.isActive('PlayScene');
-          if (import.meta.env.DEV) {
-            console.log('[Lifecycle] post-transition check', {
-              menuActive,
-              playActive,
-            });
-          }
-          if (!menuActive && !this.fallbackTransitionAttempted) {
-            this.forceSceneTransition(sceneKey, data, mode);
-          }
-        } catch (error) {
-          console.error('[Lifecycle] post-transition check failed', error);
-          if (!this.fallbackTransitionAttempted) {
-            this.forceSceneTransition(sceneKey, data, mode);
-          }
-        }
-      });
-    }
-  }
-
-  private forceSceneTransition(
-    sceneKey: string,
-    data?: object,
-    mode: 'start' | 'restart' = 'start'
-  ): void {
-    if (this.fallbackTransitionAttempted) return;
-    this.fallbackTransitionAttempted = true;
-    this.logQuitStage('forceSceneTransition');
-
-    try {
-      const manager = this.game.scene;
-
-      if (mode === 'restart' && sceneKey === 'PlayScene') {
-        manager.stop('PlayScene');
-        manager.start('PlayScene', data);
-        return;
-      }
-
-      manager.stop('PlayScene');
-      manager.start(sceneKey, data);
-    } catch (fallbackError) {
-      console.error('[Lifecycle] fallback scene transition failed', {
-        sceneKey,
-        fallbackError,
-      });
-
-      // Last-resort UI recovery without reloading the page.
-      try {
-        uiManager.showMenu(
-          sceneKey === 'MenuScene' &&
-            Boolean((data as { focusOpponent?: boolean } | undefined)?.focusOpponent)
-            ? { focusOpponent: true }
-            : undefined
-        );
-      } catch (uiError) {
-        console.error('[Lifecycle] last-resort showMenu failed', uiError);
-      }
-    }
   }
 
   /**
@@ -2651,10 +2494,5 @@ export class PlayScene extends Phaser.Scene {
         this.ballBody.setVelocity(this.storedVelocity.x, this.storedVelocity.y);
       }
     }
-  }
-
-  private quitToMenu(): void {
-    this.logQuitStage('Quit pressed');
-    this.transitionToScene('MenuScene');
   }
 }

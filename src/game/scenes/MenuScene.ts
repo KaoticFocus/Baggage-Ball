@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { uiManager } from '../../ui/UIManager';
+import { gameNavigation } from '../navigation/GameNavigationController';
 
 export class MenuScene extends Phaser.Scene {
   constructor() {
@@ -8,9 +9,10 @@ export class MenuScene extends Phaser.Scene {
 
   create(data?: { focusOpponent?: boolean }): void {
     if (import.meta.env.DEV) {
-      console.log('[Lifecycle] MenuScene created');
+      console.log('[Navigation] MenuScene created');
     }
-    // Menu must not depend on PlayScene cleanup having succeeded.
+    // Establish a complete menu state — do not assume PlayScene cleaned anything.
     uiManager.showMenu({ focusOpponent: Boolean(data?.focusOpponent) });
+    gameNavigation.onMenuSceneCreated();
   }
 }
