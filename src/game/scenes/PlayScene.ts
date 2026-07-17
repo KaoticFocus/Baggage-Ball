@@ -214,6 +214,8 @@ export class PlayScene extends Phaser.Scene {
   private onMouseMoveBound: ((e: MouseEvent) => void) | null = null;
   private onMouseLeaveBound: (() => void) | null = null;
   private sceneTeardown = false;
+  private teardownCompleted = false;
+  private fallbackTransitionAttempted = false;
   private readonly onEmotionalLoadoutKeyDown = (event: KeyboardEvent): void => {
     this.handleEmotionalLoadoutKeyDown(event);
   };
@@ -393,6 +395,8 @@ export class PlayScene extends Phaser.Scene {
 
     this.sceneRunId += 1;
     this.sceneTeardown = false;
+    this.teardownCompleted = false;
+    this.fallbackTransitionAttempted = false;
     this.isTransitioning = false;
     this.lifecycleAbortController = new AbortController();
     this.clearTrackedWindowTimers();
@@ -820,27 +824,66 @@ export class PlayScene extends Phaser.Scene {
    * Stop in-flight combat/audio/UI so match-end navigation cannot be blocked
    * by beams, VoiceDirector, captions, or leftover DOM layers.
    * Idempotent; does not fire cancel hooks, start speech/barks, or transition.
+   * Non-throwing: one subsystem failure must not block the rest.
    */
   private cleanupActiveMatchSystems(): void {
-    this.setEmotionalActionState('disabled');
+    this.safeCleanupStep('emotional action state', () => {
+      this.setEmotionalActionStateSafely('disabled');
+    });
     this.pendingEmotionalResolution = null;
     this.currentEmotionalActionId = null;
     this.emotionalCooldownUntil = 0;
-    voiceDirector.setCurrentInteractionId(null);
-    this.emotionalLoadoutController?.cancel();
-    this.emotionalDelivery?.hardReset();
-    this.clearTrackedWindowTimers();
-    this.stopValentineThinking();
-    stopValentineSpeech();
-    stopCharacterSpeech();
-    voiceDirector.stopAll();
-    uiManager.hideSpeechCaption();
-    uiManager.hideBallComment();
-    uiManager.hideOpponentBark();
-    uiManager.hideDialogue();
-    uiManager.hideOutburst();
-    uiManager.clearPendingEmotionalMode();
-    uiManager.setEmotionalCooldownProgress(0);
+    this.safeCleanupStep('voice interaction id', () => {
+      voiceDirector.setCurrentInteractionId(null);
+    });
+    this.safeCleanupStep('emotional loadout cancel', () => {
+      this.emotionalLoadoutController?.cancel();
+    });
+    this.safeCleanupStep('emotional delivery hardReset', () => {
+      this.emotionalDelivery?.hardReset();
+    });
+    this.safeCleanupStep('tracked timers', () => {
+      this.clearTrackedWindowTimers();
+    });
+    this.safeCleanupStep('valentine thinking', () => {
+      this.stopValentineThinking();
+    });
+    this.safeCleanupStep('stop valentine speech', () => {
+      stopValentineSpeech();
+    });
+    this.safeCleanupStep('stop character speech', () => {
+      stopCharacterSpeech();
+    });
+    this.safeCleanupStep('voice director stopAll', () => {
+      voiceDirector.stopAll();
+    });
+    this.safeCleanupStep('hide speech caption', () => {
+      uiManager.hideSpeechCaption();
+    });
+    this.safeCleanupStep('hide ball comment', () => {
+      uiManager.hideBallComment();
+    });
+    this.safeCleanupStep('hide opponent bark', () => {
+      uiManager.hideOpponentBark();
+    });
+    this.safeCleanupStep('hide dialogue', () => {
+      uiManager.hideDialogue();
+    });
+    this.safeCleanupStep('hide outburst', () => {
+      uiManager.hideOutburst();
+    });
+    this.safeCleanupStep('clear pending emotional mode', () => {
+      uiManager.clearPendingEmotionalMode();
+    });
+    this.safeCleanupStep('cooldown progress', () => {
+      uiManager.setEmotionalCooldownProgress(0);
+    });
+  }
+
+  private setEmotionalActionStateSafely(state: EmotionalActionState): void {
+    this.safeCleanupStep(`setEmotionalActionState(${state})`, () => {
+      this.setEmotionalActionState(state);
+    });
   }
 
   private handleRecapRematch(): void {
@@ -1622,45 +1665,105 @@ export class PlayScene extends Phaser.Scene {
     this.emotionalDelivery?.setCooldownProgress(progress);
   }
 
-  /** Idempotent full PlayScene shutdown used by SHUTDOWN/DESTROY. */
+  /** Idempotent full PlayScene shutdown used by SHUTDOWN/DESTROY. Never throws. */
   private teardownPlayScene(reason: 'shutdown' | 'destroy'): void {
-    if (this.sceneTeardown && !this.emotionalDelivery) {
-      this.logLifecycle(`teardownPlayScene (${reason}) — already torn down`);
+    if (this.teardownCompleted) {
+      this.logLifecycle(`teardownPlayScene (${reason}) — already completed`);
       return;
     }
-
+    this.teardownCompleted = true;
     this.sceneTeardown = true;
     this.isTransitioning = true;
-    this.invalidateSceneRun();
-    this.clearTrackedWindowTimers();
-    this.restorePhaserRuntime();
-    this.cleanupActiveMatchSystems();
 
-    this.teardownEmotionalLoadoutKeyboard();
-    this.removeMousePaddleListeners();
-    if (this.muteUnsubscribe) {
-      this.muteUnsubscribe();
-      this.muteUnsubscribe = null;
-    }
+    this.logLifecycle(`PlayScene ${reason}`);
+    this.logQuitStage(`${reason} started`);
 
+    this.safeCleanupStep('invalidate scene run', () => {
+      this.invalidateSceneRun();
+    });
+    this.safeCleanupStep('restore phaser', () => {
+      this.restorePhaserRuntimeSafely();
+    });
+    this.safeCleanupStep('match systems cleanup', () => {
+      this.cleanupActiveMatchSystems();
+    });
+    this.safeCleanupStep('hover morph restore', () => {
+      this.hoverMorph?.forceRestore();
+    });
+    this.safeCleanupStep('tracked timers', () => {
+      this.clearTrackedWindowTimers();
+    });
+    this.safeCleanupStep('emotional loadout keyboard', () => {
+      this.teardownEmotionalLoadoutKeyboard();
+    });
+    this.safeCleanupStep('mouse paddle listeners', () => {
+      this.removeMousePaddleListeners();
+    });
+    this.safeCleanupStep('mute unsubscribe', () => {
+      if (this.muteUnsubscribe) {
+        this.muteUnsubscribe();
+        this.muteUnsubscribe = null;
+      }
+    });
     this.pendingEmotionalResolution = null;
     this.currentEmotionalActionId = null;
-    this.emotionalLoadoutController?.cancel();
-    this.emotionalLoadoutController = null;
-    this.emotionalDelivery?.hardReset();
-    this.emotionalDelivery?.destroy();
-    this.emotionalDelivery = null;
-    uiManager.clearPendingEmotionalMode();
-    uiManager.setEmotionalCooldownProgress(0);
-    this.emotionalActionState = 'disabled';
-    uiManager.setEmotionalActionState('disabled');
-    uiManager.clearGameCallbacks();
-    this.teardownSpeechVisuals();
-    this.stopValentineThinking();
-    uiManager.hideSpeechCaption();
-    voiceDirector.stopAll();
-    voiceDirector.setCurrentInteractionId(null);
+    this.safeCleanupStep('emotional loadout controller', () => {
+      this.emotionalLoadoutController?.cancel();
+      this.emotionalLoadoutController = null;
+    });
+    this.safeCleanupStep('emotional delivery', () => {
+      this.emotionalDelivery?.hardReset();
+      this.emotionalDelivery?.destroy();
+      this.emotionalDelivery = null;
+    });
+    this.safeCleanupStep('UI emotional state', () => {
+      uiManager.clearPendingEmotionalMode();
+      uiManager.setEmotionalCooldownProgress(0);
+      this.emotionalActionState = 'disabled';
+      uiManager.setEmotionalActionState('disabled');
+    });
+    this.safeCleanupStep('UI callbacks', () => {
+      uiManager.clearGameCallbacks();
+    });
+    this.safeCleanupStep('speech visuals', () => {
+      this.teardownSpeechVisuals();
+    });
+    this.safeCleanupStep('valentine thinking', () => {
+      this.stopValentineThinking();
+    });
+    this.safeCleanupStep('hide overlays', () => {
+      uiManager.hideSpeechCaption();
+      uiManager.hideBallComment();
+      uiManager.hideOpponentBark();
+      uiManager.hideMatchOverlays();
+      uiManager.hideMatchRecap();
+      uiManager.resetGameControls();
+    });
+    this.safeCleanupStep('voice director', () => {
+      voiceDirector.stopAll();
+      voiceDirector.setCurrentInteractionId(null);
+    });
     this.logLifecycle(`teardownPlayScene (${reason})`);
+    this.logQuitStage(`${reason} completed`);
+  }
+
+  private safeCleanupStep(label: string, cleanup: () => void): void {
+    try {
+      cleanup();
+    } catch (error) {
+      console.error(`[Lifecycle] cleanup failed: ${label}`, error);
+    }
+  }
+
+  private logQuitStage(stage: string): void {
+    if (!import.meta.env.DEV) return;
+    console.log(`[Lifecycle] Quit stage: ${stage}`, {
+      sceneRunId: this.sceneRunId,
+      gameState: this.gameState,
+      isTransitioning: this.isTransitioning,
+      sceneTeardown: this.sceneTeardown,
+      teardownCompleted: this.teardownCompleted,
+    });
   }
 
   private setupEmotionalDelivery(): void {
@@ -2002,28 +2105,52 @@ export class PlayScene extends Phaser.Scene {
       this.logLifecycle('transition ignored', { targetScene });
       return false;
     }
+
     this.isTransitioning = true;
-    this.invalidateSceneRun();
-    this.lifecycleAbortController?.abort();
+
+    try {
+      this.invalidateSceneRun();
+    } catch (error) {
+      console.error('[Lifecycle] scene invalidation failed', error);
+    }
+
+    try {
+      this.lifecycleAbortController?.abort();
+    } catch (error) {
+      console.error('[Lifecycle] lifecycle abort failed', error);
+    }
+
+    this.setEmotionalActionStateSafely('disabled');
     this.logLifecycle('transition requested', { targetScene });
+    this.logQuitStage('transition requested');
     return true;
   }
 
   private restorePhaserRuntime(): void {
-    try {
-      if (this.time) {
-        this.time.paused = false;
-        this.time.timeScale = 1;
-      }
-      if (this.physics?.world?.isPaused) {
+    this.restorePhaserRuntimeSafely();
+  }
+
+  private restorePhaserRuntimeSafely(): void {
+    this.safeCleanupStep('resume scene time', () => {
+      this.time.paused = false;
+      this.time.timeScale = 1;
+    });
+
+    this.safeCleanupStep('resume physics', () => {
+      if (this.physics.world.isPaused) {
         this.physics.resume();
       }
-      this.isPaused = false;
+    });
+
+    this.safeCleanupStep('resume emotion timers', () => {
       this.emotionDirector?.resumeTimers();
+    });
+
+    this.safeCleanupStep('resume bark timers', () => {
       this.opponentBarkSystem?.resumeTimers();
-    } catch {
-      /* scene may be mid-destroy */
-    }
+    });
+
+    this.isPaused = false;
   }
 
   private clearTrackedWindowTimers(): void {
@@ -2048,26 +2175,107 @@ export class PlayScene extends Phaser.Scene {
     return waitForDelay(ms, this.lifecycleAbortController?.signal);
   }
 
+  /**
+   * Navigation-only transition. Deep cleanup belongs in SHUTDOWN.
+   * Cleanup must never be able to block scene.start().
+   */
   private transitionToScene(
     sceneKey: string,
     data?: object,
     mode: 'start' | 'restart' = 'start'
   ): void {
     if (!this.beginSceneTransition(sceneKey)) return;
-    this.restorePhaserRuntime();
-    this.logLifecycle('cleanup started', { sceneKey });
-    this.cleanupActiveMatchSystems();
-    this.hoverMorph?.forceRestore();
-    uiManager.hideMatchOverlays();
-    uiManager.hideMatchRecap();
-    uiManager.resetGameControls();
-    uiManager.clearGameCallbacks();
-    this.logLifecycle('cleanup completed', { sceneKey });
+
+    this.restorePhaserRuntimeSafely();
+
+    // Hide only the most immediate overlays — fail-open, never block navigation.
+    this.safeCleanupStep('hide immediate overlays', () => {
+      uiManager.hideMatchOverlays();
+      uiManager.hideMatchRecap();
+      uiManager.setPaused(false);
+    });
+
     this.logLifecycle('scene start called', { sceneKey, mode, data });
-    if (mode === 'restart') {
-      this.scene.restart(data);
-    } else {
-      this.scene.start(sceneKey, data);
+    this.logQuitStage('scene.start called');
+
+    try {
+      if (mode === 'restart') {
+        this.scene.restart(data);
+      } else {
+        this.scene.start(sceneKey, data);
+      }
+    } catch (error) {
+      console.error('[Lifecycle] primary scene transition failed', {
+        sceneKey,
+        mode,
+        error,
+      });
+      this.forceSceneTransition(sceneKey, data, mode);
+      return;
+    }
+
+    // Diagnostic/fallback watchdog — not the primary transition mechanism.
+    if (sceneKey === 'MenuScene') {
+      requestAnimationFrame(() => {
+        try {
+          const menuActive = this.game.scene.isActive('MenuScene');
+          const playActive = this.game.scene.isActive('PlayScene');
+          if (import.meta.env.DEV) {
+            console.log('[Lifecycle] post-transition check', {
+              menuActive,
+              playActive,
+            });
+          }
+          if (!menuActive && !this.fallbackTransitionAttempted) {
+            this.forceSceneTransition(sceneKey, data, mode);
+          }
+        } catch (error) {
+          console.error('[Lifecycle] post-transition check failed', error);
+          if (!this.fallbackTransitionAttempted) {
+            this.forceSceneTransition(sceneKey, data, mode);
+          }
+        }
+      });
+    }
+  }
+
+  private forceSceneTransition(
+    sceneKey: string,
+    data?: object,
+    mode: 'start' | 'restart' = 'start'
+  ): void {
+    if (this.fallbackTransitionAttempted) return;
+    this.fallbackTransitionAttempted = true;
+    this.logQuitStage('forceSceneTransition');
+
+    try {
+      const manager = this.game.scene;
+
+      if (mode === 'restart' && sceneKey === 'PlayScene') {
+        manager.stop('PlayScene');
+        manager.start('PlayScene', data);
+        return;
+      }
+
+      manager.stop('PlayScene');
+      manager.start(sceneKey, data);
+    } catch (fallbackError) {
+      console.error('[Lifecycle] fallback scene transition failed', {
+        sceneKey,
+        fallbackError,
+      });
+
+      // Last-resort UI recovery without reloading the page.
+      try {
+        uiManager.showMenu(
+          sceneKey === 'MenuScene' &&
+            Boolean((data as { focusOpponent?: boolean } | undefined)?.focusOpponent)
+            ? { focusOpponent: true }
+            : undefined
+        );
+      } catch (uiError) {
+        console.error('[Lifecycle] last-resort showMenu failed', uiError);
+      }
     }
   }
 
@@ -2446,6 +2654,7 @@ export class PlayScene extends Phaser.Scene {
   }
 
   private quitToMenu(): void {
+    this.logQuitStage('Quit pressed');
     this.transitionToScene('MenuScene');
   }
 }

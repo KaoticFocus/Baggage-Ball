@@ -241,11 +241,32 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
     this.queue = [];
   }
 
+  /** Synchronous, non-throwing. Never waits on audio/fetch/promises. */
   stopAll(): void {
-    this.clearQueue();
+    try {
+      this.clearQueue();
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error('[VoiceDirector] clearQueue failed during stopAll', error);
+      }
+      this.queue = [];
+    }
+
     if (this.current) {
-      this.abortItem(this.current, 'stopAll');
-      this.playback.stop();
+      try {
+        this.abortItem(this.current, 'stopAll');
+      } catch (error) {
+        if (import.meta.env.DEV) {
+          console.error('[VoiceDirector] abortItem failed during stopAll', error);
+        }
+      }
+      try {
+        this.playback.stop();
+      } catch (error) {
+        if (import.meta.env.DEV) {
+          console.error('[VoiceDirector] playback.stop failed during stopAll', error);
+        }
+      }
       // Do not null current here — processQueue finally owns that reset.
     } else {
       this.processing = false;
@@ -523,19 +544,35 @@ export class VoiceDirector extends Phaser.Events.EventEmitter {
   private settleItem(item: QueuedItem, result: VoiceSpeakResult): void {
     if (item.settled) return;
     item.settled = true;
-    item.resolve(result);
+    try {
+      item.resolve(result);
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error('[VoiceDirector] resolve threw during settle', error);
+      }
+    }
   }
 
   private finishCancelled(item: QueuedItem, reason: string): void {
     if (item.settled) return;
-    if (!item.abortController.signal.aborted) {
-      item.abortController.abort();
+    try {
+      if (!item.abortController.signal.aborted) {
+        item.abortController.abort();
+      }
+    } catch {
+      /* ignore */
     }
     logVoice('speech request cancelled', {
       requestId: item.request.id,
       reason,
     });
-    item.request.onCancel?.();
+    try {
+      item.request.onCancel?.();
+    } catch (error) {
+      if (import.meta.env.DEV) {
+        console.error('[VoiceDirector] onCancel threw during cancel', error);
+      }
+    }
     this.settleItem(item, {
       ok: false,
       durationMs: 0,

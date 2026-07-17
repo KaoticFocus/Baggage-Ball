@@ -159,7 +159,13 @@ export class UIManager {
     });
 
     this.pauseBtn.addEventListener('click', () => this.onPauseToggle?.());
-    document.getElementById('hud-quit-btn')!.addEventListener('click', () => this.onQuit?.());
+    document.getElementById('hud-quit-btn')!.addEventListener('click', () => {
+      if (import.meta.env.DEV) {
+        console.log('[UI] Quit button DOM click');
+        console.log('[UI] Quit callback present', Boolean(this.onQuit));
+      }
+      this.onQuit?.();
+    });
     this.renderEmotionalInventoryOnce();
     this.setEmotionalActionState('disabled');
     // Keyboard 1–9 is owned by PlayScene → useEmotionalAction (not duplicated here).
@@ -497,6 +503,10 @@ export class UIManager {
     this.hideOpponentBark();
     this.hideBallComment();
     this.hideSpeechCaption();
+    this.pauseBanner.classList.add('hidden');
+    this.resetGameControls();
+    // Drop any destroyed PlayScene callbacks — menu must not depend on PlayScene teardown.
+    this.clearGameCallbacks();
     if (options?.focusOpponent) {
       requestAnimationFrame(() => {
         document.querySelector('.opponent-select-section')?.scrollIntoView({

@@ -208,10 +208,22 @@ export class SpeechPlaybackEngine {
   stop(): void {
     this.playGeneration += 1;
     this.setPlaybackActive(false);
-    this.audioElement.pause();
-    this.audioElement.removeAttribute('src');
-    this.audioElement.load();
-    this.releaseObjectUrl();
+    try {
+      this.audioElement.pause();
+    } catch {
+      /* browser audio exceptions must not escape into scene teardown */
+    }
+    try {
+      this.audioElement.removeAttribute('src');
+      this.audioElement.load();
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.releaseObjectUrl();
+    } catch {
+      /* ignore */
+    }
   }
 
   isPlaybackActive(): boolean {
