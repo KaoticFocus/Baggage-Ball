@@ -12,6 +12,7 @@ export class MenuScene extends Phaser.Scene {
       console.log('[Navigation] MenuScene created');
     }
     // Establish a complete menu state — do not assume PlayScene cleaned anything.
+    uiManager.setGameplayCursorHidden(false);
     uiManager.showMenu({ focusOpponent: Boolean(data?.focusOpponent) });
     gameNavigation.onMenuSceneCreated();
   }

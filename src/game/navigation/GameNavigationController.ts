@@ -85,6 +85,13 @@ class GameNavigationController {
     this.navigationInProgress = true;
     this.log('goToMainMenu requested', { options });
 
+    // Always restore cursor before any cleanup or SceneManager work.
+    try {
+      uiManager.setGameplayCursorHidden(false);
+    } catch {
+      /* ignore */
+    }
+
     const menuOptions = options?.focusOpponent ? { focusOpponent: true } : undefined;
 
     // 1–4: Immediate UI — menu must not depend on PlayScene cleanup.
@@ -212,6 +219,12 @@ class GameNavigationController {
     this.navigationInProgress = true;
     this.log('startMatch requested', { data });
 
+    try {
+      uiManager.setGameplayCursorHidden(false);
+    } catch {
+      /* ignore */
+    }
+
     const manager = this.manager;
     try {
       uiManager.clearGameCallbacks();
@@ -268,6 +281,12 @@ class GameNavigationController {
     }
     this.navigationInProgress = true;
     this.log('restartMatch requested', { data });
+
+    try {
+      uiManager.setGameplayCursorHidden(false);
+    } catch {
+      /* ignore */
+    }
 
     const manager = this.manager;
     try {

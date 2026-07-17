@@ -253,6 +253,14 @@ export class UIManager {
     this.pauseBanner.classList.toggle('hidden', !paused);
   }
 
+  /**
+   * Authoritative gameplay cursor visibility (CSS class, not Pointer Lock).
+   * Hide only while PlayScene is interactively playing; menus/pause/recap always show.
+   */
+  setGameplayCursorHidden(hidden: boolean): void {
+    document.documentElement.classList.toggle('gameplay-cursor-hidden', hidden);
+  }
+
   resetGameControls(): void {
     this.setPaused(false);
   }
@@ -523,6 +531,7 @@ export class UIManager {
   }
 
   showMenu(options?: { focusOpponent?: boolean }): void {
+    this.setGameplayCursorHidden(false);
     this.renderBallSelect();
     this.renderOpponentSelect();
     this.menuOverlay.classList.remove('hidden');
@@ -1200,6 +1209,9 @@ export class UIManager {
       onMainMenu?: () => void;
     }
   ): void {
+    // Cursor must be visible before results buttons become interactive.
+    this.setGameplayCursorHidden(false);
+
     // Store match identity for Rematch — navigation is app-level, not PlayScene closures.
     this.lastRecapMatch = {
       ballId: data.ballId,

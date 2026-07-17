@@ -218,6 +218,12 @@ export class PlayScene extends Phaser.Scene {
   private readonly onEmotionalLoadoutKeyDown = (event: KeyboardEvent): void => {
     this.handleEmotionalLoadoutKeyDown(event);
   };
+  private readonly onEscapeKeyDown = (event: KeyboardEvent): void => {
+    this.handleEscapeKey(event);
+  };
+  private readonly onWindowBlur = (): void => {
+    this.handleWindowBlur();
+  };
   private valentineThinkingRotationTimer: number | null = null;
   private valentineThinkingNotesTimer: number | null = null;
   private valentineThinkingStartedAt = 0;
@@ -363,6 +369,8 @@ export class PlayScene extends Phaser.Scene {
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.setupKeyboard();
     this.setupEmotionalLoadoutKeyboard();
+    this.setupEscapeKey();
+    this.setupWindowBlurHandler();
     this.setupMousePaddleInput();
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -422,6 +430,8 @@ export class PlayScene extends Phaser.Scene {
     });
     this.updateUI();
     this.syncUILayout();
+    // Menu is hidden via showPlaying — hide cursor for interactive match flow.
+    this.syncGameplayCursor();
     this.startMatchFlow();
 
     this.physics.add.collider(
@@ -757,6 +767,8 @@ export class PlayScene extends Phaser.Scene {
     this.cleanupActiveMatchSystems();
     uiManager.hidePointFlash();
     uiManager.hideMatchOverlays();
+    // Cursor visible before results buttons become interactive.
+    uiManager.setGameplayCursorHidden(false);
 
     const winner = this.matchSystem.getWinner();
     if (!winner) return;
@@ -1669,6 +1681,15 @@ export class PlayScene extends Phaser.Scene {
     this.safeCleanupStep('emotional loadout keyboard', () => {
       this.teardownEmotionalLoadoutKeyboard();
     });
+    this.safeCleanupStep('escape key listener', () => {
+      this.teardownEscapeKey();
+    });
+    this.safeCleanupStep('window blur listener', () => {
+      this.teardownWindowBlurHandler();
+    });
+    this.safeCleanupStep('restore cursor', () => {
+      uiManager.setGameplayCursorHidden(false);
+    });
     this.safeCleanupStep('mouse paddle listeners', () => {
       this.removeMousePaddleListeners();
     });
@@ -2435,6 +2456,66 @@ export class PlayScene extends Phaser.Scene {
     }
   }
 
+  private handleEscapeKey(event: KeyboardEvent): void {
+    if (event.code !== 'Escape' && event.key !== 'Escape') return;
+    if (event.repeat) return;
+    if (this.sceneTeardown || this.isTransitioning) return;
+    if (this.gameState === 'matchEnd') return;
+    if (isTypingInFormField()) return;
+
+    event.preventDefault();
+    this.togglePause();
+  }
+
+  private setupEscapeKey(): void {
+    this.teardownEscapeKey();
+    window.addEventListener('keydown', this.onEscapeKeyDown);
+  }
+
+  private teardownEscapeKey(): void {
+    window.removeEventListener('keydown', this.onEscapeKeyDown);
+  }
+
+  private setupWindowBlurHandler(): void {
+    this.teardownWindowBlurHandler();
+    window.addEventListener('blur', this.onWindowBlur);
+  }
+
+  private teardownWindowBlurHandler(): void {
+    window.removeEventListener('blur', this.onWindowBlur);
+  }
+
+  private handleWindowBlur(): void {
+    if (this.sceneTeardown || this.isTransitioning) return;
+    // Always restore cursor on focus loss.
+    uiManager.setGameplayCursorHidden(false);
+    // Auto-pause if actively playing; do not auto-resume on focus return.
+    if (!this.isPaused && this.gameState !== 'matchEnd') {
+      this.pauseGame();
+    }
+  }
+
+  /**
+   * Hide the system cursor only during interactive match states that are not paused.
+   * Menus, pause, match-end, and transitions always show the cursor.
+   */
+  private syncGameplayCursor(): void {
+    if (this.sceneTeardown || this.isTransitioning || this.isPaused) {
+      uiManager.setGameplayCursorHidden(false);
+      return;
+    }
+    if (
+      this.gameState === 'intro' ||
+      this.gameState === 'countdown' ||
+      this.gameState === 'playing' ||
+      this.gameState === 'pointBreak'
+    ) {
+      uiManager.setGameplayCursorHidden(true);
+      return;
+    }
+    uiManager.setGameplayCursorHidden(false);
+  }
+
   private pauseGame(): void {
     if (this.isPaused || this.gameState === 'matchEnd') return;
     if (this.sceneTeardown || this.isTransitioning) return;
@@ -2454,6 +2535,8 @@ export class PlayScene extends Phaser.Scene {
     this.emotionDirector.pauseTimers();
     this.opponentBarkSystem.pauseTimers();
     uiManager.setPaused(true);
+    // Restore cursor immediately — before any pause bark/speech.
+    uiManager.setGameplayCursorHidden(false);
     this.setEmotionalActionState('disabled');
     this.syncUILayout();
     this.logLifecycle('pause');
@@ -2493,6 +2576,13 @@ export class PlayScene extends Phaser.Scene {
       if (speed > 10) {
         this.ballBody.setVelocity(this.storedVelocity.x, this.storedVelocity.y);
       }
+    }
+
+    // Hide cursor again only if resume is still valid for gameplay.
+    if (this.isSceneRunCurrent(runId) && !this.isTransitioning && !this.sceneTeardown) {
+      this.syncGameplayCursor();
+    } else {
+      uiManager.setGameplayCursorHidden(false);
     }
   }
 }

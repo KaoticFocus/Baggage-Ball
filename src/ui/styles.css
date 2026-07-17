@@ -26,6 +26,12 @@ body {
   max-height: 100dvh;
 }
 
+/* Hide system cursor during active gameplay (not Pointer Lock). */
+.gameplay-cursor-hidden,
+.gameplay-cursor-hidden * {
+  cursor: none !important;
+}
+
 /*
  * App shell owns vertical fit. Bottom padding reserves Emotional Inventory space
  * so Phaser FIT/CENTER never places the canvas (or HUD anchors) above the viewport.
